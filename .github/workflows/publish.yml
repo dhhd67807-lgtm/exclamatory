@@ -39,8 +39,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: ./.github/actions/setup-bun
-
       - name: Setup git committer
         id: committer
         uses: ./.github/actions/setup-git-committer
@@ -48,19 +46,61 @@ jobs:
           opencode-app-id: ${{ vars.OPENCODE_APP_ID }}
           opencode-app-secret: ${{ secrets.OPENCODE_APP_SECRET }}
 
-      - name: Install OpenCode
-        if: inputs.bump || inputs.version
-        run: bun i -g opencode-ai
-
       - id: version
+        shell: bash
         run: |
-          ./script/version.ts
+          set -euo pipefail
+
+          repo="${GITHUB_REPOSITORY}"
+          version="${INPUT_VERSION}"
+
+          if [ -z "${version}" ]; then
+            latest="$(gh release list -R "${repo}" --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)"
+            version="${latest#v}"
+          fi
+
+          if [ -z "${version}" ] || [ "${version}" = "null" ]; then
+            version="$(python3 - <<'PY'
+import json
+with open("packages/desktop/package.json", "r", encoding="utf-8") as f:
+    print(json.load(f)["version"])
+PY
+)"
+          fi
+
+          if [ -n "${INPUT_BUMP}" ]; then
+            export CURRENT_VERSION="${version}"
+            version="$(python3 - <<'PY'
+import os
+v = os.environ["CURRENT_VERSION"]
+t = os.environ["INPUT_BUMP"].lower()
+major, minor, patch = [int(x) for x in v.split(".")]
+if t == "major":
+    print(f"{major+1}.0.0")
+elif t == "minor":
+    print(f"{major}.{minor+1}.0")
+else:
+    print(f"{major}.{minor}.{patch+1}")
+PY
+)"
+          fi
+
+          tag="v${version}"
+          if gh release view "${tag}" -R "${repo}" >/dev/null 2>&1; then
+            release="$(gh release view "${tag}" -R "${repo}" --json databaseId --jq '.databaseId')"
+          else
+            gh release create "${tag}" -d --title "${tag}" --notes "Automated release." -R "${repo}"
+            release="$(gh release view "${tag}" -R "${repo}" --json databaseId --jq '.databaseId')"
+          fi
+
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "release=${release}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "repo=${repo}" >> "${GITHUB_OUTPUT}"
         env:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
-          OPENCODE_BUMP: ${{ inputs.bump }}
-          OPENCODE_VERSION: ${{ inputs.version }}
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          GH_REPO: ${{ github.repository }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_BUMP: ${{ inputs.bump }}
     outputs:
       version: ${{ steps.version.outputs.version }}
       release: ${{ steps.version.outputs.release }}

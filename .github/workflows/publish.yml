@@ -32,7 +32,7 @@ permissions:
 
 jobs:
   version:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     if: github.repository == 'anomalyco/opencode' || github.repository == 'dhhd67807-lgtm/exclamatory'
     steps:
       - uses: actions/checkout@v3
@@ -69,7 +69,7 @@ jobs:
 
   build-cli:
     needs: version
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     if: github.repository == 'anomalyco/opencode' || github.repository == 'dhhd67807-lgtm/exclamatory'
     steps:
       - uses: actions/checkout@v3
@@ -113,7 +113,7 @@ jobs:
     needs:
       - build-cli
       - version
-    runs-on: blacksmith-4vcpu-windows-2025
+    runs-on: windows-2025
     if: github.repository == 'anomalyco/opencode' || github.repository == 'dhhd67807-lgtm/exclamatory'
     env:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -232,7 +232,7 @@ jobs:
           # github-hosted: blacksmith lacks ARM64 MSVC cross-compilation toolchain
           - host: windows-2025
             target: aarch64-pc-windows-msvc
-          - host: blacksmith-4vcpu-windows-2025
+          - host: windows-2025
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.settings.host }}
     steps:
@@ -407,7 +407,7 @@ jobs:
           - host: "windows-2025"
             target: aarch64-pc-windows-msvc
             platform_flag: --win --arm64
-          - host: "blacksmith-4vcpu-windows-2025"
+          - host: "windows-2025"
             target: x86_64-pc-windows-msvc
             platform_flag: --win
     runs-on: ${{ matrix.settings.host }}
@@ -537,7 +537,7 @@ jobs:
       - sign-cli-windows
       - build-tauri
       - build-electron
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
 

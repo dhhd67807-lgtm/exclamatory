@@ -35,16 +35,9 @@ jobs:
     runs-on: ubuntu-latest
     if: github.repository == 'anomalyco/opencode' || github.repository == 'dhhd67807-lgtm/exclamatory'
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Setup git committer
-        id: committer
-        uses: ./.github/actions/setup-git-committer
-        with:
-          opencode-app-id: ${{ vars.OPENCODE_APP_ID }}
-          opencode-app-secret: ${{ secrets.OPENCODE_APP_SECRET }}
 
       - id: version
         shell: bash
@@ -98,7 +91,7 @@ jobs:
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
           echo "repo=${repo}" >> "${GITHUB_OUTPUT}"
         env:
-          GH_TOKEN: ${{ steps.committer.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_BUMP: ${{ inputs.bump }}
     outputs:
@@ -112,18 +105,11 @@ jobs:
     runs-on: ubuntu-latest
     if: github.repository == 'anomalyco/opencode' || github.repository == 'dhhd67807-lgtm/exclamatory'
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-tags: true
 
       - uses: ./.github/actions/setup-bun
-
-      - name: Setup git committer
-        id: committer
-        uses: ./.github/actions/setup-git-committer
-        with:
-          opencode-app-id: ${{ vars.OPENCODE_APP_ID }}
-          opencode-app-secret: ${{ secrets.OPENCODE_APP_SECRET }}
 
       - name: Build
         id: build
@@ -133,7 +119,7 @@ jobs:
           OPENCODE_VERSION: ${{ needs.version.outputs.version }}
           OPENCODE_RELEASE: ${{ needs.version.outputs.release }}
           GH_REPO: ${{ needs.version.outputs.repo }}
-          GH_TOKEN: ${{ steps.committer.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -163,19 +149,12 @@ jobs:
       AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
       AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - uses: actions/download-artifact@v4
         with:
           name: opencode-cli-windows
           path: packages/opencode/dist
-
-      - name: Setup git committer
-        id: committer
-        uses: ./.github/actions/setup-git-committer
-        with:
-          opencode-app-id: ${{ vars.OPENCODE_APP_ID }}
-          opencode-app-secret: ${{ secrets.OPENCODE_APP_SECRET }}
 
       - name: Azure login
         uses: azure/login@v2
@@ -232,7 +211,7 @@ jobs:
         if: needs.version.outputs.release != ''
         shell: pwsh
         env:
-          GH_TOKEN: ${{ steps.committer.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "v${{ needs.version.outputs.version }}" `
             "${{ github.workspace }}\packages\opencode\dist\opencode-windows-arm64.zip" `
@@ -276,7 +255,7 @@ jobs:
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.settings.host }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-tags: true
 
@@ -371,13 +350,6 @@ jobs:
         if: contains(matrix.settings.host, 'ubuntu')
         run: cargo tauri --version
 
-      - name: Setup git committer
-        id: committer
-        uses: ./.github/actions/setup-git-committer
-        with:
-          opencode-app-id: ${{ vars.OPENCODE_APP_ID }}
-          opencode-app-secret: ${{ secrets.OPENCODE_APP_SECRET }}
-
       - name: Build and upload artifacts
         uses: tauri-apps/tauri-action@390cbe447412ced1303d35abe75287949e43437a
         timeout-minutes: 60
@@ -394,7 +366,7 @@ jobs:
           repo: ""
           releaseCommitish: ${{ github.sha }}
         env:
-          GITHUB_TOKEN: ${{ steps.committer.outputs.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           TAURI_BUNDLER_NEW_APPIMAGE_FORMAT: true
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -453,7 +425,7 @@ jobs:
     runs-on: ${{ matrix.settings.host }}
     # if: github.ref_name == 'beta'
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - uses: apple-actions/import-codesign-certs@v2
         if: runner.os == 'macOS'
@@ -497,13 +469,6 @@ jobs:
           sudo apt-get install -y --no-install-recommends -o dir::cache::archives="$HOME/apt-cache" rpm
           sudo chmod -R a+rw ~/apt-cache
 
-      - name: Setup git committer
-        id: committer
-        uses: ./.github/actions/setup-git-committer
-        with:
-          opencode-app-id: ${{ vars.OPENCODE_APP_ID }}
-          opencode-app-secret: ${{ secrets.OPENCODE_APP_SECRET }}
-
       - name: Prepare
         run: bun ./scripts/prepare.ts
         working-directory: packages/desktop-electron
@@ -528,7 +493,7 @@ jobs:
         timeout-minutes: 60
         env:
           OPENCODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta') || 'prod' }}
-          GH_TOKEN: ${{ steps.committer.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
           CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_API_KEY: ${{ runner.temp }}/apple-api-key.p8
@@ -579,7 +544,7 @@ jobs:
       - build-electron
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - uses: ./.github/actions/setup-bun
 
@@ -600,13 +565,6 @@ jobs:
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
-
-      - name: Setup git committer
-        id: committer
-        uses: ./.github/actions/setup-git-committer
-        with:
-          opencode-app-id: ${{ vars.OPENCODE_APP_ID }}
-          opencode-app-secret: ${{ secrets.OPENCODE_APP_SECRET }}
 
       - uses: actions/download-artifact@v4
         with:
@@ -653,7 +611,7 @@ jobs:
           OPENCODE_VERSION: ${{ needs.version.outputs.version }}
           OPENCODE_RELEASE: ${{ needs.version.outputs.release }}
           AUR_KEY: ${{ secrets.AUR_KEY }}
-          GITHUB_TOKEN: ${{ steps.committer.outputs.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           GH_REPO: ${{ needs.version.outputs.repo }}
           NPM_CONFIG_PROVENANCE: false
           LATEST_YML_DIR: /tmp/latest-yml

@@ -61,28 +61,28 @@ jobs:
 
           if [ -z "${version}" ] || [ "${version}" = "null" ]; then
             version="$(python3 - <<'PY'
-import json
-with open("packages/desktop/package.json", "r", encoding="utf-8") as f:
-    print(json.load(f)["version"])
-PY
-)"
+          import json
+          with open("packages/desktop/package.json", "r", encoding="utf-8") as f:
+              print(json.load(f)["version"])
+          PY
+          )"
           fi
 
           if [ -n "${INPUT_BUMP}" ]; then
             export CURRENT_VERSION="${version}"
             version="$(python3 - <<'PY'
-import os
-v = os.environ["CURRENT_VERSION"]
-t = os.environ["INPUT_BUMP"].lower()
-major, minor, patch = [int(x) for x in v.split(".")]
-if t == "major":
-    print(f"{major+1}.0.0")
-elif t == "minor":
-    print(f"{major}.{minor+1}.0")
-else:
-    print(f"{major}.{minor}.{patch+1}")
-PY
-)"
+          import os
+          v = os.environ["CURRENT_VERSION"]
+          t = os.environ["INPUT_BUMP"].lower()
+          major, minor, patch = [int(x) for x in v.split(".")]
+          if t == "major":
+              print(f"{major+1}.0.0")
+          elif t == "minor":
+              print(f"{major}.{minor+1}.0")
+          else:
+              print(f"{major}.{minor}.{patch+1}")
+          PY
+          )"
           fi
 
           tag="v${version}"
@@ -347,7 +347,7 @@ PY
           bun ./scripts/prepare.ts
         env:
           OPENCODE_VERSION: ${{ needs.version.outputs.version }}
-          GITHUB_TOKEN: ${{ steps.committer.outputs.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           OPENCODE_CLI_ARTIFACT: ${{ (runner.os == 'Windows' && 'opencode-cli-windows') || 'opencode-cli' }}
           RUST_TARGET: ${{ matrix.settings.target }}
           GH_TOKEN: ${{ github.token }}

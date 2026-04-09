@@ -495,7 +495,7 @@ jobs:
           OPENCODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta') || 'prod' }}
 
       - name: Package and publish
-        if: needs.version.outputs.release
+        if: ${{ needs.version.outputs.release && github.repository == 'anomalyco/opencode' }}
         run: npx electron-builder ${{ matrix.settings.platform_flag }} --publish always --config electron-builder.config.ts
         working-directory: packages/desktop-electron
         timeout-minutes: 60
@@ -509,7 +509,7 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
 
       - name: Package (no publish)
-        if: ${{ !needs.version.outputs.release }}
+        if: ${{ !needs.version.outputs.release || github.repository != 'anomalyco/opencode' }}
         run: npx electron-builder ${{ matrix.settings.platform_flag }} --publish never --config electron-builder.config.ts
         working-directory: packages/desktop-electron
         timeout-minutes: 60

@@ -8,6 +8,8 @@ import type { Configuration } from "electron-builder"
 const execFileAsync = promisify(execFile)
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const signScript = path.join(rootDir, "script", "sign-windows.ps1")
+const updateOwner = process.env.OPENCODE_UPDATE_OWNER ?? "dhhd67807-lgtm"
+const updateRepo = process.env.OPENCODE_UPDATE_REPO ?? "exclamatory"
 
 async function signWindows(configuration: { path: string }) {
   if (process.platform !== "win32") return
@@ -27,7 +29,7 @@ const channel = (() => {
 })()
 
 const getBase = (): Configuration => ({
-  artifactName: "opencode-electron-${os}-${arch}.${ext}",
+  artifactName: "exclamatory-desktop-${os}-${arch}.${ext}",
   directories: {
     output: "dist",
     buildResources: "resources",
@@ -59,7 +61,7 @@ const getBase = (): Configuration => ({
     sign: true,
   },
   protocols: {
-    name: "OpenCode",
+    name: "Exclamatory",
     schemes: ["opencode"],
   },
   win: {
@@ -89,28 +91,28 @@ function getConfig() {
     case "dev": {
       return {
         ...base,
-        appId: "ai.opencode.desktop.dev",
-        productName: "OpenCode Dev",
+        appId: "ai.exclamatory.desktop.dev",
+        productName: "Exclamatory",
         rpm: { packageName: "opencode-dev" },
       }
     }
     case "beta": {
       return {
         ...base,
-        appId: "ai.opencode.desktop.beta",
-        productName: "OpenCode Beta",
-        protocols: { name: "OpenCode Beta", schemes: ["opencode"] },
-        publish: { provider: "github", owner: "anomalyco", repo: "opencode-beta", channel: "latest" },
+        appId: "ai.exclamatory.desktop.beta",
+        productName: "Exclamatory Beta",
+        protocols: { name: "Exclamatory Beta", schemes: ["opencode"] },
+        publish: { provider: "github", owner: updateOwner, repo: updateRepo, channel: "latest" },
         rpm: { packageName: "opencode-beta" },
       }
     }
     case "prod": {
       return {
         ...base,
-        appId: "ai.opencode.desktop",
-        productName: "OpenCode",
-        protocols: { name: "OpenCode", schemes: ["opencode"] },
-        publish: { provider: "github", owner: "anomalyco", repo: "opencode", channel: "latest" },
+        appId: "ai.exclamatory.desktop",
+        productName: "Exclamatory",
+        protocols: { name: "Exclamatory", schemes: ["opencode"] },
+        publish: { provider: "github", owner: updateOwner, repo: updateRepo, channel: "latest" },
         rpm: { packageName: "opencode" },
       }
     }

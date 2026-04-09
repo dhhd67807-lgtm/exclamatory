@@ -30,7 +30,7 @@ const channel = (() => {
 })()
 
 const getBase = (): Configuration => ({
-  artifactName: `${artifact}.${ext}`,
+  artifactName: `${artifact}.\${ext}`,
   directories: {
     output: "dist",
     buildResources: "resources",

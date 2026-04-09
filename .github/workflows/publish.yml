@@ -23,7 +23,9 @@ on:
         required: false
         type: string
 
-concurrency: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.version || inputs.bump }}
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   id-token: write
@@ -33,7 +35,7 @@ permissions:
 jobs:
   version:
     runs-on: ubuntu-latest
-    if: github.repository == 'anomalyco/opencode' || github.repository == 'dhhd67807-lgtm/exclamatory'
+    if: github.repository == 'anomalyco/opencode' || (github.repository == 'dhhd67807-lgtm/exclamatory' && github.event_name == 'workflow_dispatch')
     steps:
       - uses: actions/checkout@v4
         with:
@@ -103,7 +105,7 @@ jobs:
   build-cli:
     needs: version
     runs-on: ubuntu-latest
-    if: github.repository == 'anomalyco/opencode' || github.repository == 'dhhd67807-lgtm/exclamatory'
+    if: github.repository == 'anomalyco/opencode' || (github.repository == 'dhhd67807-lgtm/exclamatory' && github.event_name == 'workflow_dispatch')
     steps:
       - uses: actions/checkout@v4
         with:
@@ -140,7 +142,7 @@ jobs:
       - build-cli
       - version
     runs-on: windows-2025
-    if: github.repository == 'anomalyco/opencode' || github.repository == 'dhhd67807-lgtm/exclamatory'
+    if: github.repository == 'anomalyco/opencode' || (github.repository == 'dhhd67807-lgtm/exclamatory' && github.event_name == 'workflow_dispatch')
     env:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}

@@ -418,16 +418,20 @@ jobs:
           - host: macos-latest
             target: x86_64-apple-darwin
             platform_flag: --mac --x64
+            artifact_name: "exclamatory intel"
           - host: macos-latest
             target: aarch64-apple-darwin
             platform_flag: --mac --arm64
+            artifact_name: "exclamatory apple silicon"
           # github-hosted: blacksmith lacks ARM64 MSVC cross-compilation toolchain
           - host: "windows-2025"
             target: aarch64-pc-windows-msvc
             platform_flag: --win --arm64
+            artifact_name: "exclamatory x32"
           - host: "windows-2025"
             target: x86_64-pc-windows-msvc
             platform_flag: --win
+            artifact_name: "exclamatory windows x64"
     runs-on: ${{ matrix.settings.host }}
     # if: github.ref_name == 'beta'
     steps:
@@ -500,6 +504,7 @@ jobs:
         env:
           OPENCODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta') || 'prod' }}
           GH_TOKEN: ${{ github.token }}
+          EXCLAMATORY_ARTIFACT_NAME: ${{ matrix.settings.artifact_name }}
           CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
           CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_API_KEY: ${{ runner.temp }}/apple-api-key.p8
@@ -514,6 +519,7 @@ jobs:
         env:
           OPENCODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta') || 'prod' }}
           GH_TOKEN: ${{ github.token }}
+          EXCLAMATORY_ARTIFACT_NAME: ${{ matrix.settings.artifact_name }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
       - name: Package (no publish)
@@ -523,6 +529,7 @@ jobs:
         timeout-minutes: 60
         env:
           OPENCODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta') || 'prod' }}
+          EXCLAMATORY_ARTIFACT_NAME: ${{ matrix.settings.artifact_name }}
 
       - name: Verify signed Windows Electron artifacts
         if: ${{ runner.os == 'Windows' && env.HAS_AZURE == 'true' }}

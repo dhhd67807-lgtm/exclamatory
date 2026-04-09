@@ -10,6 +10,7 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.
 const signScript = path.join(rootDir, "script", "sign-windows.ps1")
 const updateOwner = process.env.OPENCODE_UPDATE_OWNER ?? "dhhd67807-lgtm"
 const updateRepo = process.env.OPENCODE_UPDATE_REPO ?? "exclamatory"
+const artifact = process.env.EXCLAMATORY_ARTIFACT_NAME ?? "exclamatory-desktop-${os}-${arch}"
 
 async function signWindows(configuration: { path: string }) {
   if (process.platform !== "win32") return
@@ -29,7 +30,7 @@ const channel = (() => {
 })()
 
 const getBase = (): Configuration => ({
-  artifactName: "exclamatory-desktop-${os}-${arch}.${ext}",
+  artifactName: `${artifact}.${ext}`,
   directories: {
     output: "dist",
     buildResources: "resources",
@@ -55,7 +56,7 @@ const getBase = (): Configuration => ({
     entitlements: "resources/entitlements.plist",
     entitlementsInherit: "resources/entitlements.plist",
     notarize: process.env.HAS_APPLE_API_KEY === "true",
-    target: ["dmg", "zip"],
+    target: ["dmg"],
   },
   dmg: {
     sign: true,

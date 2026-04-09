@@ -2,12 +2,13 @@
   "name": "@opencode-ai/desktop-electron",
   "private": true,
   "version": "1.3.13",
+  "description": "Exclamatory desktop app",
   "type": "module",
   "license": "MIT",
-  "homepage": "https://opencode.ai",
+  "homepage": "https://github.com/dhhd67807-lgtm/exclamatory",
   "author": {
-    "name": "OpenCode",
-    "email": "hello@opencode.ai"
+    "name": "Exclamatory",
+    "email": "support@exclamatory.app"
   },
   "scripts": {
     "typecheck": "tsgo -b",
@@ -16,9 +17,13 @@
     "prebuild": "bun ./scripts/copy-icons.ts",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
+    "prepackage": "bun ./scripts/predev.ts && bun run build",
     "package": "electron-builder --config electron-builder.config.ts",
+    "prepackage:mac": "bun run prepackage",
     "package:mac": "electron-builder --mac --config electron-builder.config.ts",
+    "prepackage:win": "bun run prepackage",
     "package:win": "electron-builder --win --config electron-builder.config.ts",
+    "prepackage:linux": "bun run prepackage",
     "package:linux": "electron-builder --linux --config electron-builder.config.ts",
     "native:build": "bun install --cwd native"
   },

@@ -63,18 +63,21 @@ const getBase = (): Configuration => ({
   },
   protocols: {
     name: "Exclamatory",
-    schemes: ["opencode"],
+    schemes: ["exclamatory"],
   },
   win: {
     icon: `resources/icons/icon.ico`,
+    publisherName: "Exclamatory",
     signtoolOptions: {
       sign: signWindows,
     },
     target: ["nsis"],
   },
   nsis: {
-    oneClick: false,
-    allowToChangeInstallationDirectory: true,
+    oneClick: true,
+    allowToChangeInstallationDirectory: false,
+    shortcutName: "Exclamatory",
+    uninstallDisplayName: "Exclamatory",
     installerIcon: `resources/icons/icon.ico`,
     installerHeaderIcon: `resources/icons/icon.ico`,
   },
@@ -94,6 +97,7 @@ function getConfig() {
         ...base,
         appId: "ai.exclamatory.desktop.dev",
         productName: "Exclamatory",
+        executableName: "exclamatory-dev",
         rpm: { packageName: "opencode-dev" },
       }
     }
@@ -102,7 +106,8 @@ function getConfig() {
         ...base,
         appId: "ai.exclamatory.desktop.beta",
         productName: "Exclamatory Beta",
-        protocols: { name: "Exclamatory Beta", schemes: ["opencode"] },
+        executableName: "exclamatory-beta",
+        protocols: { name: "Exclamatory Beta", schemes: ["exclamatory"] },
         publish: { provider: "github", owner: updateOwner, repo: updateRepo, channel: "latest" },
         rpm: { packageName: "opencode-beta" },
       }
@@ -112,7 +117,8 @@ function getConfig() {
         ...base,
         appId: "ai.exclamatory.desktop",
         productName: "Exclamatory",
-        protocols: { name: "Exclamatory", schemes: ["opencode"] },
+        executableName: "exclamatory",
+        protocols: { name: "Exclamatory", schemes: ["exclamatory"] },
         publish: { provider: "github", owner: updateOwner, repo: updateRepo, channel: "latest" },
         rpm: { packageName: "opencode" },
       }

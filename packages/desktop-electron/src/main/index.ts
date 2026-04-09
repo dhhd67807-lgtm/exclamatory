@@ -9,17 +9,17 @@ import { app, BrowserWindow, dialog } from "electron"
 import pkg from "electron-updater"
 
 const APP_NAMES: Record<string, string> = {
-  dev: "OpenCode Dev",
-  beta: "OpenCode Beta",
-  prod: "OpenCode",
+  dev: "Exclamatory",
+  beta: "Exclamatory Beta",
+  prod: "Exclamatory",
 }
 const APP_IDS: Record<string, string> = {
-  dev: "ai.opencode.desktop.dev",
-  beta: "ai.opencode.desktop.beta",
-  prod: "ai.opencode.desktop",
+  dev: "ai.exclamatory.desktop.dev",
+  beta: "ai.exclamatory.desktop.beta",
+  prod: "ai.exclamatory.desktop",
 }
-app.setName(app.isPackaged ? APP_NAMES[CHANNEL] : "OpenCode Dev")
-app.setPath("userData", join(app.getPath("appData"), app.isPackaged ? APP_IDS[CHANNEL] : "ai.opencode.desktop.dev"))
+app.setName(app.isPackaged ? APP_NAMES[CHANNEL] : "Exclamatory")
+app.setPath("userData", join(app.getPath("appData"), app.isPackaged ? APP_IDS[CHANNEL] : "ai.exclamatory.desktop.dev"))
 const { autoUpdater } = pkg
 
 import type { InitStep, ServerReadyData, SqliteMigrationProgress, WslConfig } from "../preload/types"
@@ -63,7 +63,7 @@ function setupApp() {
   }
 
   app.on("second-instance", (_event: Event, argv: string[]) => {
-    const urls = argv.filter((arg: string) => arg.startsWith("opencode://"))
+    const urls = argv.filter((arg: string) => arg.startsWith("exclamatory://"))
     if (urls.length) {
       logger.log("deep link received via second-instance", { urls })
       emitDeepLinks(urls)
@@ -85,6 +85,11 @@ function setupApp() {
     killSidecar()
   })
 
+  app.on("window-all-closed", () => {
+    killSidecar()
+    app.quit()
+  })
+
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
       killSidecar()
@@ -94,7 +99,7 @@ function setupApp() {
 
   void app.whenReady().then(async () => {
     // migrate()
-    app.setAsDefaultProtocolClient("opencode")
+    app.setAsDefaultProtocolClient("exclamatory")
     setDockIcon()
     setupAutoUpdater()
     syncCli()
@@ -186,6 +191,10 @@ async function initialize() {
   }
 
   mainWindow = createMainWindow(globals)
+  mainWindow.on("closed", () => {
+    mainWindow = null
+    killSidecar()
+  })
   wireMenu()
 
   overlay?.close()

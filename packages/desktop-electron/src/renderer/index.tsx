@@ -32,7 +32,7 @@ if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
 
 void initI18n()
 
-const deepLinkEvent = "opencode:deep-link"
+const deepLinkEvent = "exclamatory:deep-link"
 
 const emitDeepLinks = (urls: string[]) => {
   if (urls.length === 0) return
@@ -71,14 +71,76 @@ const createPlatform = (): Platform => {
   }
 
   const storage = (() => {
-    const cache = new Map<string, AsyncStorage>()
+    const WAIT = 250
+    const cache = new Map<string, AsyncStorage & { flush: () => Promise<void> }>()
+
+    const drain = async () => {
+      const list = Array.from(cache.values())
+      await Promise.all(list.map((api) => api.flush().catch(() => undefined)))
+    }
+
+    if ("addEventListener" in globalThis) {
+      const hide = () => {
+        if (document.visibilityState !== "hidden") return
+        void drain()
+      }
+      window.addEventListener("pagehide", () => void drain())
+      document.addEventListener("visibilitychange", hide)
+    }
 
     const createStorage = (name: string) => {
-      const api: AsyncStorage = {
-        getItem: (key: string) => window.api.storeGet(name, key),
-        setItem: (key: string, value: string) => window.api.storeSet(name, key, value),
-        removeItem: (key: string) => window.api.storeDelete(name, key),
-        clear: () => window.api.storeClear(name),
+      const pending = new Map<string, string | null>()
+      let timer: ReturnType<typeof setTimeout> | undefined
+      let flushing: Promise<void> | undefined
+
+      const flush = async () => {
+        if (flushing) return flushing
+
+        flushing = (async () => {
+          while (pending.size > 0) {
+            const batch = Array.from(pending.entries())
+            pending.clear()
+            await window.api
+              .storeBatch(
+                name,
+                batch.map(([key, value]) => ({ key, value })),
+              )
+              .catch(() => undefined)
+          }
+        })().finally(() => {
+          flushing = undefined
+        })
+
+        return flushing
+      }
+
+      const schedule = () => {
+        if (timer) return
+        timer = setTimeout(() => {
+          timer = undefined
+          void flush()
+        }, WAIT)
+      }
+
+      const api: AsyncStorage & { flush: () => Promise<void> } = {
+        flush,
+        getItem: async (key: string) => {
+          const next = pending.get(key)
+          if (next !== undefined) return next
+          return window.api.storeGet(name, key)
+        },
+        setItem: async (key: string, value: string) => {
+          pending.set(key, value)
+          schedule()
+        },
+        removeItem: async (key: string) => {
+          pending.set(key, null)
+          schedule()
+        },
+        clear: async () => {
+          pending.clear()
+          await window.api.storeClear(name).catch(() => undefined)
+        },
         key: async (index: number) => (await window.api.storeKeys(name))[index],
         getLength: () => window.api.storeLength(name),
         get length() {
@@ -179,7 +241,7 @@ const createPlatform = (): Platform => {
 
       const notification = new Notification(title, {
         body: description ?? "",
-        icon: "https://opencode.ai/favicon-96x96-v3.png",
+        icon: "./favicon-96x96-v3.png",
       })
       notification.onclick = () => {
         void window.api.showWindow()
@@ -302,14 +364,15 @@ render(() => {
     menuTrigger = (id) => cmd.trigger(id)
 
     const theme = useTheme()
+    let bg = ""
 
     createEffect(() => {
       theme.themeId()
       theme.mode()
-      const bg = getComputedStyle(document.documentElement).getPropertyValue("--background-base").trim()
-      if (bg) {
-        void window.api.setBackgroundColor(bg)
-      }
+      const next = getComputedStyle(document.documentElement).getPropertyValue("--background-base").trim()
+      if (!next || next === bg) return
+      bg = next
+      void window.api.setBackgroundColor(next)
     })
 
     return null

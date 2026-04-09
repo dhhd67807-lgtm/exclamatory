@@ -67,7 +67,6 @@ const getBase = (): Configuration => ({
   },
   win: {
     icon: `resources/icons/icon.ico`,
-    publisherName: "Exclamatory",
     signtoolOptions: {
       sign: signWindows,
     },

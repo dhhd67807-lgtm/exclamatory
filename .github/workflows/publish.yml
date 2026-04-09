@@ -493,7 +493,7 @@ jobs:
           OPENCODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta') || 'prod' }}
 
       - name: Package and publish
-        if: ${{ needs.version.outputs.release && (github.repository == 'anomalyco/opencode' || github.repository == 'dhhd67807-lgtm/exclamatory') }}
+        if: ${{ needs.version.outputs.release && (github.repository == 'anomalyco/opencode' || github.repository == 'dhhd67807-lgtm/exclamatory') && (runner.os == 'Windows' || env.HAS_APPLE_CERT == 'true') }}
         run: npx electron-builder ${{ matrix.settings.platform_flag }} --publish always --config electron-builder.config.ts
         working-directory: packages/desktop-electron
         timeout-minutes: 60
@@ -505,6 +505,16 @@ jobs:
           APPLE_API_KEY: ${{ runner.temp }}/apple-api-key.p8
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+
+      - name: Package and publish (mac unsigned)
+        if: ${{ needs.version.outputs.release && (github.repository == 'anomalyco/opencode' || github.repository == 'dhhd67807-lgtm/exclamatory') && runner.os == 'macOS' && env.HAS_APPLE_CERT != 'true' }}
+        run: npx electron-builder ${{ matrix.settings.platform_flag }} --publish always --config electron-builder.config.ts
+        working-directory: packages/desktop-electron
+        timeout-minutes: 60
+        env:
+          OPENCODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta') || 'prod' }}
+          GH_TOKEN: ${{ github.token }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
       - name: Package (no publish)
         if: ${{ !needs.version.outputs.release || (github.repository != 'anomalyco/opencode' && github.repository != 'dhhd67807-lgtm/exclamatory') }}

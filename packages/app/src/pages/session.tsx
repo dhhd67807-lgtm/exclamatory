@@ -52,7 +52,6 @@ import { MessageTimeline } from "@/pages/session/message-timeline"
 import { type DiffStyle, SessionReviewTab, type SessionReviewTabProps } from "@/pages/session/review-tab"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { syncSessionModel } from "@/pages/session/session-model-helpers"
-import { SessionSidePanel } from "@/pages/session/session-side-panel"
 import { TerminalPanel } from "@/pages/session/terminal-panel"
 import { useSessionCommands } from "@/pages/session/use-session-commands"
 import { useSessionHashScroll } from "@/pages/session/use-session-hash-scroll"
@@ -393,15 +392,54 @@ export default function Page() {
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
   const size = createSizing()
-  const desktopReviewOpen = createMemo(() => isDesktop() && view().reviewPanel.opened())
+  const hasPlanPanel = createMemo(() => {
+    const id = params.id
+    if (!id) return false
+    const list = sync.data.todo[id] ?? globalSync.data.session_todo[id] ?? []
+    return list.length > 0
+  })
+  const desktopReviewOpen = createMemo(() => isDesktop() && hasPlanPanel() && view().reviewPanel.opened())
   const desktopFileTreeOpen = createMemo(() => isDesktop() && layout.fileTree.opened())
-  const desktopSidePanelOpen = createMemo(() => desktopReviewOpen() || desktopFileTreeOpen())
+  const desktopSidePanelOpen = createMemo(() => desktopReviewOpen())
+  const fullSidebarWidth = 344
+  let sidebarWidthBeforePlan: number | undefined
+  const pane = createMemo(() => {
+    const value = layout.session.width()
+    if (typeof window === "undefined") return value
+    const min = 450
+    const max = Math.max(min, Math.floor(window.innerWidth * 0.72))
+    if (value < min) return min
+    if (value > max) return max
+    return value
+  })
   const sessionPanelWidth = createMemo(() => {
     if (!desktopSidePanelOpen()) return "100%"
-    if (desktopReviewOpen()) return `${layout.session.width()}px`
-    return `calc(100% - ${layout.fileTree.width()}px)`
+    return `${pane()}px`
   })
   const centered = createMemo(() => isDesktop() && !desktopReviewOpen())
+  const hasTypedInput = createMemo(() =>
+    prompt.current().some((part) => part.type === "text" && !!part.content.trim()),
+  )
+
+  createEffect(() => {
+    if (!desktopSidePanelOpen()) return
+    if (layout.session.width() === pane()) return
+    layout.session.resize(pane())
+  })
+
+  createEffect(() => {
+    if (!isDesktop()) return
+    if (!desktopReviewOpen()) {
+      if (sidebarWidthBeforePlan === undefined) sidebarWidthBeforePlan = layout.sidebar.width()
+      const next = Math.max(layout.sidebar.width(), fullSidebarWidth)
+      if (layout.sidebar.width() !== next) layout.sidebar.resize(next)
+      return
+    }
+    if (sidebarWidthBeforePlan !== undefined && layout.sidebar.width() !== sidebarWidthBeforePlan) {
+      layout.sidebar.resize(sidebarWidthBeforePlan)
+    }
+    sidebarWidthBeforePlan = undefined
+  })
 
   function normalizeTab(tab: string) {
     if (!tab.startsWith("file://")) return tab
@@ -510,7 +548,7 @@ export default function Page() {
   const [store, setStore] = createStore({
     messageId: undefined as string | undefined,
     mobileTab: "session" as "session" | "changes",
-    changes: "session" as "session" | "turn",
+    changes: "turn" as "session" | "turn",
     newSessionWorktree: "main",
     deferRender: false,
   })
@@ -562,8 +600,92 @@ export default function Page() {
     return open
   }, desktopReviewOpen())
 
+  const norm = (value: string) => value.replaceAll("\\", "/")
+  const samePath = (left: string, right: string) => {
+    const a = norm(left)
+    const b = norm(right)
+    if (a === b) return true
+    if (a.endsWith(`/${b}`)) return true
+    if (b.endsWith(`/${a}`)) return true
+    return false
+  }
   const turnDiffs = createMemo(() => lastUserMessage()?.summary?.diffs ?? [])
-  const reviewDiffs = createMemo(() => (store.changes === "session" ? diffs() : turnDiffs()))
+  const turnPaths = createMemo(() => {
+    const id = params.id
+    if (!id) return [] as string[]
+
+    const list = sync.data.message[id] ?? []
+    const at = list.findLastIndex((item) => item.role === "user")
+    if (at < 0) return [] as string[]
+
+    const rows = list.slice(at + 1).filter((item) => item.role === "assistant")
+    if (rows.length === 0) return [] as string[]
+
+    const out: string[] = []
+    const seen = new Set<string>()
+    const add = (value: unknown) => {
+      if (typeof value !== "string") return
+      const text = value.trim()
+      if (!text) return
+      const key = norm(text).toLowerCase()
+      if (seen.has(key)) return
+      seen.add(key)
+      out.push(text)
+    }
+
+    for (const row of rows) {
+      for (const item of sync.data.part[row.id] ?? []) {
+        if (item.type !== "tool") continue
+        if (item.tool !== "edit" && item.tool !== "write" && item.tool !== "apply_patch" && item.tool !== "multiedit")
+          continue
+
+        const input =
+          item.state.input && typeof item.state.input === "object" && !Array.isArray(item.state.input)
+            ? (item.state.input as Record<string, unknown>)
+            : undefined
+        add(input?.filePath)
+
+        const meta =
+          "metadata" in item.state &&
+          item.state.metadata &&
+          typeof item.state.metadata === "object" &&
+          !Array.isArray(item.state.metadata)
+            ? (item.state.metadata as Record<string, unknown>)
+            : undefined
+
+        const diff =
+          meta?.filediff && typeof meta.filediff === "object" && !Array.isArray(meta.filediff)
+            ? (meta.filediff as Record<string, unknown>)
+            : undefined
+        add(diff?.file)
+
+        if (item.tool === "apply_patch" && Array.isArray(meta?.files)) {
+          for (const file of meta.files) {
+            if (!file || typeof file !== "object" || Array.isArray(file)) continue
+            const row = file as Record<string, unknown>
+            add(row.relativePath)
+            add(row.filePath)
+            add(row.movePath)
+          }
+        }
+
+        if (item.tool === "multiedit" && Array.isArray(input?.edits)) {
+          for (const edit of input.edits) {
+            if (!edit || typeof edit !== "object" || Array.isArray(edit)) continue
+            add((edit as Record<string, unknown>).filePath)
+          }
+        }
+      }
+    }
+
+    return out
+  })
+  const reviewDiffs = createMemo(() => {
+    const paths = turnPaths()
+    if (paths.length > 0) return diffs().filter((item) => paths.some((path) => samePath(item.file, path)))
+    if (store.changes === "session") return diffs()
+    return turnDiffs()
+  })
 
   const newSessionWorktree = createMemo(() => {
     if (store.newSessionWorktree === "create") return "create"
@@ -789,8 +911,22 @@ export default function Page() {
       sessionKey,
       () => {
         setStore("messageId", undefined)
-        setStore("changes", "session")
+        setStore("changes", "turn")
         setUi("pendingMessage", undefined)
+      },
+      { defer: true },
+    ),
+  )
+
+  createEffect(
+    on(
+      () => lastUserMessage()?.id,
+      (next, prev) => {
+        if (next === prev) return
+        if (prev === undefined) return
+        setTree("pendingDiff", undefined)
+        setTree("activeDiff", undefined)
+        view().review.setOpen([])
       },
       { defer: true },
     ),
@@ -1059,6 +1195,11 @@ export default function Page() {
     <div class="flex flex-col h-full overflow-hidden bg-background-stronger contain-strict">
       <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
         {reviewContent({
+          classes: {
+            root: "pr-0",
+            header: "hidden",
+            container: "px-0",
+          },
           diffStyle: layout.review.diffStyle(),
           onDiffStyleChange: layout.review.setDiffStyle,
           loadingClass: "px-6 py-4 text-text-weak",
@@ -1116,7 +1257,7 @@ export default function Page() {
 
   const focusReviewDiff = (path: string) => {
     openReviewPanel()
-    view().review.openPath(path)
+    view().review.setOpen([path])
     setTree({ activeDiff: path, pendingDiff: path })
   }
 
@@ -1165,9 +1306,7 @@ export default function Page() {
     const id = params.id
     if (!id) return
 
-    const wants = isDesktop()
-      ? desktopFileTreeOpen() || (desktopReviewOpen() && activeTab() === "review")
-      : store.mobileTab === "changes"
+    const wants = isDesktop() ? desktopFileTreeOpen() || desktopReviewOpen() : store.mobileTab === "changes"
     if (!wants) return
     if (sync.data.session_diff[id] !== undefined) return
     if (sync.status === "loading") return
@@ -1180,9 +1319,7 @@ export default function Page() {
       () =>
         [
           sessionKey(),
-          isDesktop()
-            ? desktopFileTreeOpen() || (desktopReviewOpen() && activeTab() === "review")
-            : store.mobileTab === "changes",
+          isDesktop() ? desktopFileTreeOpen() || desktopReviewOpen() : store.mobileTab === "changes",
         ] as const,
       ([key, wants]) => {
         if (diffFrame !== undefined) cancelAnimationFrame(diffFrame)
@@ -1784,6 +1921,7 @@ export default function Page() {
                     }}
                     renderedUserMessages={historyWindow.renderedUserMessages()}
                     anchor={anchor}
+                    hasTypedInput={hasTypedInput()}
                   />
                 </Show>
               </Match>
@@ -1847,7 +1985,7 @@ export default function Page() {
             <div onPointerDown={() => size.start()}>
               <ResizeHandle
                 direction="horizontal"
-                size={layout.session.width()}
+                size={pane()}
                 min={450}
                 max={typeof window === "undefined" ? 1000 : window.innerWidth * 0.45}
                 onResize={(width) => {
@@ -1859,13 +1997,6 @@ export default function Page() {
           </Show>
         </div>
 
-        <SessionSidePanel
-          reviewPanel={reviewPanel}
-          activeDiff={tree.activeDiff}
-          focusReviewDiff={focusReviewDiff}
-          reviewSnap={ui.reviewSnap}
-          size={size}
-        />
       </div>
 
       <TerminalPanel />

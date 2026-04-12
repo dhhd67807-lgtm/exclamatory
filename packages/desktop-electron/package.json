@@ -1,7 +1,7 @@
 {
   "name": "@opencode-ai/desktop-electron",
   "private": true,
-  "version": "1.3.13",
+  "version": "1.0.2",
   "description": "Exclamatory desktop app",
   "type": "module",
   "license": "MIT",

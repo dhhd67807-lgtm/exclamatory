@@ -2,7 +2,6 @@ import {
   batch,
   createEffect,
   createMemo,
-  createResource,
   For,
   on,
   onCleanup,
@@ -20,9 +19,6 @@ import { base64Encode } from "@opencode-ai/util/encode"
 import { decode64 } from "@/utils/base64"
 import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
 import { Button } from "@opencode-ai/ui/button"
-import { IconButton } from "@opencode-ai/ui/icon-button"
-import { Tooltip } from "@opencode-ai/ui/tooltip"
-import { DropdownMenu } from "@opencode-ai/ui/dropdown-menu"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { getFilename } from "@opencode-ai/util/path"
 import { Session, type Message } from "@opencode-ai/sdk/v2/client"
@@ -54,12 +50,13 @@ import { createAim } from "@/utils/aim"
 import { setNavigate } from "@/utils/notification-click"
 import { Worktree as WorktreeState } from "@/utils/worktree"
 import { setSessionHandoff } from "@/pages/session/handoff"
+import { SDKProvider } from "@/context/sdk"
+import { SyncProvider } from "@/context/sync"
 
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useTheme, type ColorScheme } from "@opencode-ai/ui/theme/context"
 import { useCommand, type CommandOption } from "@/context/command"
 import { ConstrainDragXAxis, getDraggableId } from "@/utils/solid-dnd"
-import { DebugBar } from "@/components/debug-bar"
 import { Titlebar } from "@/components/titlebar"
 import { useServer } from "@/context/server"
 import { useLanguage, type Locale } from "@/context/language"
@@ -125,7 +122,6 @@ export default function Layout(props: ParentProps) {
   const command = useCommand()
   const theme = useTheme()
   const language = useLanguage()
-  const initialDirectory = decode64(params.dir)
   const route = createMemo(() => {
     const slug = params.dir
     if (!slug) return { slug, dir: "" }
@@ -147,7 +143,6 @@ export default function Layout(props: ParentProps) {
   const currentDir = createMemo(() => route().dir)
 
   const [state, setState] = createStore({
-    autoselect: !initialDirectory,
     busyWorkspaces: {} as Record<string, boolean>,
     hoverSession: undefined as string | undefined,
     hoverProject: undefined as string | undefined,
@@ -300,15 +295,6 @@ export default function Layout(props: ParentProps) {
   createEffect(() => {
     if (!layout.sidebar.opened()) return
     setHoverProject(undefined)
-  })
-
-  createEffect(() => {
-    if (!state.autoselect) return
-    const dir = params.dir
-    if (!dir) return
-    const directory = decode64(dir)
-    if (!directory) return
-    setState("autoselect", false)
   })
 
   const editorOpen = editor.editorOpen
@@ -584,24 +570,6 @@ export default function Layout(props: ParentProps) {
     if (!root) return
 
     return projects.find((p) => p.worktree === root)
-  })
-
-  const [autoselecting] = createResource(async () => {
-    await ready.promise
-    await layout.ready.promise
-    if (!untrack(() => state.autoselect)) return
-
-    const list = layout.projects.list()
-    const last = server.projects.last()
-
-    if (list.length === 0) {
-      if (!last) return
-      await openProject(last, true)
-    } else {
-      const next = list.find((project) => project.worktree === last) ?? list[0]
-      if (!next) return
-      await openProject(next.worktree, true)
-    }
   })
 
   const workspaceName = (directory: string, projectId?: string, branch?: string) => {
@@ -1226,6 +1194,26 @@ export default function Layout(props: ParentProps) {
     void import("@/components/dialog-settings").then((x) => {
       if (dialogDead || dialogRun !== run) return
       dialog.show(() => <x.DialogSettings />)
+    })
+  }
+
+  function openMcp() {
+    const dir = currentDir() || currentProject()?.worktree || layout.projects.list()[0]?.worktree
+    if (!dir) {
+      void chooseProject()
+      return
+    }
+
+    const run = ++dialogRun
+    void import("@/components/dialog-select-mcp").then((x) => {
+      if (dialogDead || dialogRun !== run) return
+      dialog.show(() => (
+        <SDKProvider directory={() => dir}>
+          <SyncProvider>
+            <x.DialogSelectMcp />
+          </SyncProvider>
+        </SDKProvider>
+      ))
     })
   }
 
@@ -2050,42 +2038,17 @@ export default function Layout(props: ParentProps) {
     const hover = createMemo(() => !panelProps.mobile && panelProps.merged === false && !layout.sidebar.opened())
     const popover = createMemo(() => !!panelProps.mobile || panelProps.merged === false || layout.sidebar.opened())
     const empty = createMemo(() => !params.dir && layout.projects.list().length === 0)
-    const projectName = createMemo(() => {
-      const item = project()
-      if (!item) return ""
-      return item.name || getFilename(item.worktree)
-    })
-    const projectId = createMemo(() => project()?.id ?? "")
-    const worktree = createMemo(() => project()?.worktree ?? "")
-    const slug = createMemo(() => {
-      const dir = worktree()
-      if (!dir) return ""
-      return base64Encode(dir)
-    })
     const workspaces = createMemo(() => {
       const item = project()
       if (!item) return [] as string[]
       return workspaceIds(item)
     })
-    const unseenCount = createMemo(() =>
-      workspaces().reduce((total, directory) => total + notification.project.unseenCount(directory), 0),
-    )
-    const clearNotifications = () =>
-      workspaces()
-        .filter((directory) => notification.project.unseenCount(directory) > 0)
-        .forEach((directory) => notification.project.markViewed(directory))
     const workspacesEnabled = createMemo(() => {
       const item = project()
       if (!item) return false
       if (item.vcs !== "git") return false
       return layout.sidebar.workspaces(item.worktree)()
     })
-    const canToggle = createMemo(() => {
-      const item = project()
-      if (!item) return false
-      return item.vcs === "git" || layout.sidebar.workspaces(item.worktree)()
-    })
-    const homedir = createMemo(() => globalSync.data.path.home)
 
     return (
       <div
@@ -2123,127 +2086,11 @@ export default function Layout(props: ParentProps) {
           }
         >
           <>
-            <div class="shrink-0 pl-1 py-1">
-              <div class="group/project flex items-start justify-between gap-2 py-2 pl-2 pr-0">
-                <div class="flex flex-col min-w-0">
-                  <InlineEditor
-                    id={`project:${projectId()}`}
-                    value={projectName}
-                    onSave={(next) => {
-                      const item = project()
-                      if (!item) return
-                      renameProject(item, next)
-                    }}
-                    class="text-14-medium text-text-strong truncate"
-                    displayClass="text-14-medium text-text-strong truncate"
-                    stopPropagation
-                  />
-
-                  <Tooltip
-                    placement="bottom"
-                    gutter={2}
-                    value={worktree()}
-                    class="shrink-0"
-                    contentStyle={{
-                      "max-width": "640px",
-                      transform: "translate3d(52px, 0, 0)",
-                    }}
-                  >
-                    <span class="text-12-regular text-text-base truncate select-text">
-                      {worktree().replace(homedir(), "~")}
-                    </span>
-                  </Tooltip>
-                </div>
-
-                <DropdownMenu modal={!sidebarHovering()}>
-                  <DropdownMenu.Trigger
-                    as={IconButton}
-                    icon="dot-grid"
-                    variant="ghost"
-                    data-action="project-menu"
-                    data-project={slug()}
-                    class="shrink-0 size-6 rounded-md transition-opacity data-[expanded]:bg-surface-base-active"
-                    classList={{
-                      "opacity-100": panelProps.mobile || merged(),
-                      "opacity-0 group-hover/project:opacity-100 group-focus-within/project:opacity-100 data-[expanded]:opacity-100":
-                        !panelProps.mobile && !merged(),
-                    }}
-                    aria-label={language.t("common.moreOptions")}
-                  />
-                  <DropdownMenu.Portal>
-                    <DropdownMenu.Content class="mt-1">
-                      <DropdownMenu.Item
-                        onSelect={() => {
-                          const item = project()
-                          if (!item) return
-                          showEditProjectDialog(item)
-                        }}
-                      >
-                        <DropdownMenu.ItemLabel>{language.t("common.edit")}</DropdownMenu.ItemLabel>
-                      </DropdownMenu.Item>
-                      <DropdownMenu.Item
-                        data-action="project-workspaces-toggle"
-                        data-project={slug()}
-                        disabled={!canToggle()}
-                        onSelect={() => {
-                          const item = project()
-                          if (!item) return
-                          toggleProjectWorkspaces(item)
-                        }}
-                      >
-                        <DropdownMenu.ItemLabel>
-                          {workspacesEnabled()
-                            ? language.t("sidebar.workspaces.disable")
-                            : language.t("sidebar.workspaces.enable")}
-                        </DropdownMenu.ItemLabel>
-                      </DropdownMenu.Item>
-                      <DropdownMenu.Item
-                        data-action="project-clear-notifications"
-                        data-project={slug()}
-                        disabled={unseenCount() === 0}
-                        onSelect={clearNotifications}
-                      >
-                        <DropdownMenu.ItemLabel>
-                          {language.t("sidebar.project.clearNotifications")}
-                        </DropdownMenu.ItemLabel>
-                      </DropdownMenu.Item>
-                      <DropdownMenu.Separator />
-                      <DropdownMenu.Item
-                        data-action="project-close-menu"
-                        data-project={slug()}
-                        onSelect={() => {
-                          const dir = worktree()
-                          if (!dir) return
-                          closeProject(dir)
-                        }}
-                      >
-                        <DropdownMenu.ItemLabel>{language.t("common.close")}</DropdownMenu.ItemLabel>
-                      </DropdownMenu.Item>
-                    </DropdownMenu.Content>
-                  </DropdownMenu.Portal>
-                </DropdownMenu>
-              </div>
-            </div>
-
             <div class="flex-1 min-h-0 flex flex-col">
               <Show
                 when={workspacesEnabled()}
                 fallback={
                   <>
-                    <div class="shrink-0 py-4">
-                      <Button
-                        size="large"
-                        icon="new-session"
-                        class="w-full"
-                        onClick={() => {
-                          const dir = worktree()
-                          if (!dir) return
-                          navigateWithSidebarReset(`/${base64Encode(dir)}/session`)
-                        }}
-                      >
-                        {language.t("command.session.new")}
-                      </Button>
-                    </div>
                     <div class="flex-1 min-h-0">
                       <LocalWorkspace
                         ctx={workspaceSidebarCtx}
@@ -2369,6 +2216,8 @@ export default function Layout(props: ParentProps) {
       settingsLabel={() => language.t("sidebar.settings")}
       settingsKeybind={() => command.keybind("settings.open")}
       onOpenSettings={openSettings}
+      mcpLabel={() => language.t("dialog.mcp.title")}
+      onOpenMcp={openMcp}
       helpLabel={() => language.t("sidebar.help")}
       onOpenHelp={() => platform.openLink("https://opencode.ai/desktop-feedback")}
       renderPanel={() =>
@@ -2383,30 +2232,32 @@ export default function Layout(props: ParentProps) {
       <div class="flex-1 min-h-0 min-w-0 flex">
         <div class="flex-1 min-h-0 relative">
           <div class="size-full relative overflow-x-hidden">
-            <nav
-              aria-label={language.t("sidebar.nav.projectsAndSessions")}
-              data-component="sidebar-nav-desktop"
-              classList={{
-                "hidden xl:block": true,
-                "absolute inset-y-0 left-0": true,
-                "z-10": true,
-              }}
-              style={{ width: `${side()}px` }}
-              ref={(el) => {
-                setState("nav", el)
-              }}
-              onMouseEnter={() => {
-                disarm()
-              }}
-              onMouseLeave={() => {
-                aim.reset()
-                if (!sidebarHovering()) return
+            <Show when={params.dir}>
+              <nav
+                aria-label={language.t("sidebar.nav.projectsAndSessions")}
+                data-component="sidebar-nav-desktop"
+                classList={{
+                  "hidden xl:block": true,
+                  "absolute inset-y-0 left-0": true,
+                  "z-10": true,
+                }}
+                style={{ width: `${side()}px` }}
+                ref={(el) => {
+                  setState("nav", el)
+                }}
+                onMouseEnter={() => {
+                  disarm()
+                }}
+                onMouseLeave={() => {
+                  aim.reset()
+                  if (!sidebarHovering()) return
 
-                arm()
-              }}
-            >
-              <div class="@container w-full h-full contain-strict">{sidebarContent()}</div>
-            </nav>
+                  arm()
+                }}
+              >
+                <div class="@container w-full h-full contain-strict">{sidebarContent()}</div>
+              </nav>
+            </Show>
 
             <Show when={layout.sidebar.opened()}>
               <div
@@ -2429,10 +2280,12 @@ export default function Layout(props: ParentProps) {
               </div>
             </Show>
 
-            <div
-              class="hidden xl:block pointer-events-none absolute top-0 right-0 z-0 border-t border-border-weaker-base"
-              style={{ left: "calc(4rem + 12px)" }}
-            />
+            <Show when={params.dir}>
+              <div
+                class="hidden xl:block pointer-events-none absolute top-0 right-0 z-0 border-t border-border-weaker-base"
+                style={{ left: "calc(4rem + 12px)" }}
+              />
+            </Show>
 
             <div class="xl:hidden">
               <div
@@ -2462,23 +2315,23 @@ export default function Layout(props: ParentProps) {
             <div
               classList={{
                 "absolute inset-0": true,
-                "xl:inset-y-0 xl:right-0 xl:left-[var(--main-left)]": true,
+                "xl:inset-y-0 xl:right-0 xl:left-[var(--main-left)]": !!params.dir,
+                "xl:inset-0": !params.dir,
                 "z-20": true,
                 "transition-[left] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[left] motion-reduce:transition-none":
                   !state.sizing,
               }}
               style={{
-                "--main-left": layout.sidebar.opened() ? `${side()}px` : "4rem",
+                "--main-left": params.dir ? (layout.sidebar.opened() ? `${side()}px` : "4rem") : "0",
               }}
             >
               <main
                 classList={{
-                  "size-full overflow-x-hidden flex flex-col items-start contain-strict border-t border-border-weak-base bg-background-base xl:border-l xl:rounded-tl-[12px]": true,
+                  "size-full overflow-x-hidden flex flex-col items-start contain-strict bg-background-base": true,
+                  "border-t border-border-weak-base xl:border-l xl:rounded-tl-[12px]": !!params.dir,
                 }}
               >
-                <Show when={!autoselecting.loading} fallback={<div class="size-full" />}>
-                  {props.children}
-                </Show>
+                {props.children}
               </main>
             </div>
 
@@ -2521,7 +2374,6 @@ export default function Layout(props: ParentProps) {
             </div>
           </div>
         </div>
-        {import.meta.env.DEV && <DebugBar />}
       </div>
       <Toast.Region />
     </div>

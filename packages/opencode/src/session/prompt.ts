@@ -35,8 +35,11 @@ import { ConfigMarkdown } from "../config/markdown"
 import { SessionSummary } from "./summary"
 import { NamedError } from "@opencode-ai/util/error"
 import { SessionProcessor } from "./processor"
+import { Todo } from "./todo"
 import { TaskTool } from "@/tool/task"
+import { TaskListStore } from "@/tool/tasklist-store"
 import { Tool } from "@/tool/tool"
+import { LogScanTool } from "@/tool/log_scan"
 import { Permission } from "@/permission"
 import { SessionStatus } from "./status"
 import { LLM } from "./llm"
@@ -381,6 +384,601 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         return input.messages
       })
 
+      const no = new Set(["grep", "rg", "ripgrep", "which", "command", "test", "[", "[[", "git"])
+
+      const code = (meta: unknown) => {
+        if (!meta || typeof meta !== "object") return
+        const val = (meta as { exit?: unknown }).exit
+        if (typeof val !== "number") return
+        return val
+      }
+
+      const cmd = (args: unknown) => {
+        if (!args || typeof args !== "object") return
+        const val = (args as { command?: unknown }).command
+        if (typeof val !== "string") return
+        return val
+      }
+
+      const dir = (args: unknown) => {
+        if (!args || typeof args !== "object") return
+        const val = (args as { workdir?: unknown }).workdir
+        if (typeof val !== "string" || !val.trim()) return
+        return val
+      }
+
+      const fail = (line: string | undefined, val: number | null | undefined, stop?: boolean) => {
+        if (stop) return false
+        if (val === undefined || val === null || val === 0) return false
+        if (!line) return true
+        const head = line.trim().split(/\s+/)[0] ?? ""
+        if (!head || !no.has(head)) return true
+        return /\b(error|exception|fatal|panic|traceback|failed|failure|unhandled)\b/i.test(line)
+      }
+
+      const scan = Effect.fn("SessionPrompt.autoLogScan")(function* (root: string, ctx: Tool.Context) {
+        const tool = yield* Effect.promise(() => LogScanTool.init())
+        return yield* Effect.promise(() =>
+          tool.execute(
+            {
+              path: root,
+              since_minutes: 180,
+              file_limit: 5,
+              lines_per_file: 8,
+            },
+            ctx,
+          ),
+        )
+      })
+
+      const closed = new Set(["completed", "cancelled", "canceled", "done", "resolved", "closed"])
+
+      const readOnly = new Set([
+        "read",
+        "read_file",
+        "read_many_files",
+        "multi_read",
+        "get_internal_docs",
+        "list",
+        "list_dir",
+        "list_directory",
+        "glob",
+        "grep",
+        "grep_search",
+        "repo_scan",
+        "list_project_files",
+        "codesearch",
+        "webfetch",
+        "web_fetch",
+        "websearch",
+        "web_search",
+        "web_agent",
+        "browser_agent",
+        "view_image",
+        "screenshot",
+        "tool_search",
+        "skill",
+        "sleep",
+        "question",
+        "ask_user_question",
+        "ask_user",
+        "todowrite",
+        "todo_write",
+        "plan_exit",
+        "list_agents",
+        "task_get",
+        "task_list",
+        "read_thread_terminal",
+        "terminal_capture",
+        "read_background_output",
+        "list_background_processes",
+        "list_thread_terminals",
+        "log_scan",
+        "list_mcp_resources",
+        "list_mcp_resource_templates",
+        "read_mcp_resource",
+      ])
+
+      const runTool = new Set([
+        "bash",
+        "local_shell",
+        "container_exec",
+        "exec_command",
+        "write_stdin",
+        "run_shell_command",
+        "shell_command",
+        "js_repl",
+        "js_repl_reset",
+      ])
+
+      const pathArg = (args: unknown) => {
+        if (!args || typeof args !== "object") return ""
+        const item = args as { filePath?: unknown; file_path?: unknown; path?: unknown }
+        const raw = item.filePath ?? item.file_path ?? item.path
+        if (typeof raw !== "string") return ""
+        return raw.trim()
+      }
+
+      const subArg = (args: unknown) => {
+        if (!args || typeof args !== "object") return ""
+        const item = args as { subagent_type?: unknown }
+        if (typeof item.subagent_type !== "string") return ""
+        return item.subagent_type.trim()
+      }
+
+      const guard = (tool: string, args: unknown, input: { agent: Agent.Info; session: Session.Info }) => {
+        if (!Flag.OPENCODE_EXPERIMENTAL_PLAN_MODE) return
+        if (input.agent.name !== "plan") return
+        const id = tool.toLowerCase()
+        if (id === "task" || id === "agent") {
+          const sub = subArg(args)
+          if (!sub || sub === "explore") return
+          return `Plan mode runtime policy blocked ${tool}: only explore subagents are allowed.`
+        }
+        if (id === "assign_task" || id === "send_message") {
+          return `Plan mode runtime policy blocked ${tool}: assignment tools are disabled in plan mode.`
+        }
+        if (id === "write" || id === "edit" || id === "write_file") {
+          const target = pathArg(args)
+          if (!target) return `Plan mode runtime policy blocked ${tool}: missing target plan file path.`
+          const file = path.isAbsolute(target) ? path.resolve(target) : path.resolve(Instance.directory, target)
+          const plan = path.resolve(Session.plan(input.session))
+          if (file === plan) return
+          return `Plan mode runtime policy blocked ${tool}: only ${plan} can be edited in plan mode.`
+        }
+        if (id === "apply_patch") {
+          return "Plan mode runtime policy blocked apply_patch: use write/edit on the plan file."
+        }
+        if (runTool.has(id)) {
+          return `Plan mode runtime policy blocked ${tool}: command execution tools are disabled in plan mode.`
+        }
+        if (readOnly.has(id)) return
+        return `Plan mode runtime policy blocked ${tool}: non-readonly tools are disabled in plan mode.`
+      }
+
+      const schemaError = (text: string) =>
+        /\binvalid arguments\b/i.test(text) ||
+        /\bexpected schema\b/i.test(text) ||
+        /\bsatisfies the expected schema\b/i.test(text) ||
+        /\bschema mismatch\b/i.test(text)
+
+      const clip = (text: string, max = 220) => {
+        const line = text.replace(/\s+/g, " ").trim()
+        if (line.length <= max) return line
+        return line.slice(0, max - 3).trimEnd() + "..."
+      }
+
+      const unresolvedSchema = (msgs: MessageV2.WithParts[], userID: MessageID | undefined) => {
+        if (!userID) return
+        const open = new Map<string, string>()
+        for (const msg of msgs) {
+          if (msg.info.id <= userID) continue
+          for (const part of msg.parts) {
+            if (part.type !== "tool") continue
+            if (part.state.status === "error" && schemaError(part.state.error)) {
+              open.set(part.tool, part.state.error)
+              continue
+            }
+            if (part.state.status === "completed") {
+              open.delete(part.tool)
+            }
+          }
+        }
+        const hit = open.entries().next().value
+        if (!hit) return
+        return {
+          tool: hit[0],
+          error: hit[1],
+        }
+      }
+
+      const pending = Effect.fn("SessionPrompt.pendingWork")(function* (sessionID: SessionID) {
+        const todos = Todo.get(sessionID).filter((item) => !closed.has(item.status.trim().toLowerCase()))
+        const tasks = TaskListStore.list(sessionID).filter((item) => item.status !== "completed")
+        return { todos, tasks }
+      })
+
+      const hint = (items: { todos: Todo.Info[]; tasks: TaskListStore.Task[] }) => {
+        if (!items.todos.length && !items.tasks.length) return
+        const rows = [
+          ...items.tasks.map((item) => `Task #${item.id}: ${item.subject} [${item.status}]`),
+          ...items.todos.map((item) => `Todo: ${item.content} [${item.status}]`),
+        ].slice(0, 6)
+        return [
+          "<system-reminder>",
+          "Open work remains. Do not stop yet.",
+          ...rows.map((row) => `- ${row}`),
+          "Finish the work, or explain blockers and ask the user.",
+          "</system-reminder>",
+        ].join("\n")
+      }
+
+      const body = (msg: MessageV2.WithParts | undefined) => {
+        if (!msg || msg.info.role !== "user") return ""
+        return msg.parts
+          .flatMap((part) => {
+            if (part.type !== "text") return []
+            if (part.synthetic || part.ignored) return []
+            if (!part.text.trim()) return []
+            return [part.text]
+          })
+          .join("\n")
+          .trim()
+      }
+
+      const heavy = (msg: MessageV2.WithParts | undefined) => {
+        const text = body(msg)
+        if (!text) return false
+        if (/\b(no\s+agents?|without\s+agents?|do\s*not\s+delegate|don't\s+delegate|dont\s+delegate|no\s+subagents?)\b/i.test(text))
+          return false
+        if (msg?.parts.some((part) => part.type === "agent")) return false
+        const words = text.split(/\s+/).filter(Boolean).length
+        const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0).length
+        const tags =
+          /\b(find|search|locate|trace|inspect|review|edit|modify|patch|fix|refactor|implement|update|debug|analy[sz]e|scan|audit|investigat|root cause|architecture|migration|codebase|entire|whole|across|multiple|complex|optimi[sz]e|performance|compare|enhance|overhaul|deep|thorough)\b/i
+        const files = msg?.parts.filter((part) => part.type === "file").length ?? 0
+        if (files >= 2) return true
+        if (tags.test(text)) return true
+        if (words >= 18 && lines >= 2) return true
+        return words >= 24
+      }
+
+      const deep = (msg: MessageV2.WithParts | undefined) => {
+        const text = body(msg)
+        if (!text) return false
+        return /\b(analy[sz]e|scan|sweep|explore|audit|review|map|understand|find|locate|trace|where|root cause|bug|regression|crash|slowness|performance|investigat)\b/i.test(
+          text,
+        )
+      }
+
+      const sweep = (msg: MessageV2.WithParts | undefined) => {
+        if (!deep(msg)) return
+        return [
+          "<system-reminder>",
+          "Codex-style discovery bundle for this request:",
+          "1) Map once with repo_scan/list_project_files (avoid repeated full scans).",
+          "2) Launch 2-4 focused glob/grep searches in parallel for symbols, call paths, and config references.",
+          "3) Batch-read shortlisted files with read_many_files/multi_read, then deep-read decisive files with read.",
+          "4) Keep an evidence ledger: command/log proof -> file/symbol boundary -> next diagnostic.",
+          "5) For bug/perf issues, correlate terminal evidence via read_thread_terminal/log_scan before editing.",
+          "6) Re-run the same failing or target command after edits to verify outcome.",
+          "</system-reminder>",
+        ].join("\n")
+      }
+
+      const dev = (msg: MessageV2.WithParts | undefined) => {
+        const text = body(msg)
+        if (!text) return false
+        if (
+          /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve|preview|watch)\b/i.test(text) ||
+          /\b(?:tauri|cargo\s+tauri)\s+dev\b/i.test(text)
+        ) {
+          return true
+        }
+        if (/\b(?:run|start|launch|boot)\b.{0,24}\b(?:dev|server|preview|watch)\b/i.test(text)) return true
+        return /\b(?:vite|next|nuxt|astro|webpack|rollup|parcel)\s+dev\b/i.test(text)
+      }
+
+      const preflight = (msg: MessageV2.WithParts | undefined) => {
+        if (!dev(msg)) return
+        return [
+          "<system-reminder>",
+          "Dev-start protocol for this turn:",
+          "1) Before any dev/start/watch command, run one structure pass with repo_scan/list_project_files.",
+          "2) Run 2-4 focused glob/grep calls for scripts, entrypoints, env files, and port usage.",
+          "3) Read relevant package/build config files, then run the command.",
+          "4) For long-running dev servers, use bash background mode and monitor with read_thread_terminal.",
+          "</system-reminder>",
+        ].join("\n")
+      }
+
+      const finale = () =>
+        [
+          "<system-reminder>",
+          "Final response style for this turn:",
+          "1) End with one short polished wrap-up (target <=70 words).",
+          "2) Include only: outcome, key files/commands, and blocker/next step if any.",
+          "3) Report validation truthfully: passed, failed, or not-run; never imply success without evidence.",
+          "4) Do not repeat earlier tool logs, plans, or long rationale.",
+          "</system-reminder>",
+        ].join("\n")
+
+      const rail = () =>
+        [
+          "<system-reminder>",
+          "Tool batching discipline for this turn:",
+          "1) Parallelize only independent read/search/inspect calls.",
+          "2) Keep edits/writes/mutating commands sequential.",
+          "3) After each mutating step, run one focused verification before the next mutating step.",
+          "</system-reminder>",
+        ].join("\n")
+
+      const voice = () =>
+        [
+          "<system-reminder>",
+          "Progress wording protocol for this turn:",
+          `1) Use short first-person action updates (for example: "I'm scanning files now.", "I'm editing the target area now.", "I'm running checks now.").`,
+          "2) Do not mention raw tool IDs/names or argument schemas in user-facing status updates.",
+          "3) Keep updates concise and concrete.",
+          "</system-reminder>",
+        ].join("\n")
+
+      const refine = () =>
+        [
+          "<system-reminder>",
+          "Prompt enhancement protocol for this turn:",
+          "1) Internally rewrite the latest user request into a compact execution brief with: objective, constraints, expected output, and verification.",
+          "2) Keep the user's intent unchanged; do not broaden scope.",
+          "3) Use the enhanced brief to choose tools and execution order before calling tools.",
+          "4) If ambiguity materially changes implementation risk, ask one focused clarification after safe discovery.",
+          "</system-reminder>",
+        ].join("\n")
+
+      const grit = () =>
+        [
+          "<system-reminder>",
+          "Persistence protocol for this turn:",
+          "1) Do not stop at the first failure; keep iterating until resolved or truly blocked.",
+          "2) If the user implies a preferred method, keep that method first; repair and retry before proposing alternatives.",
+          "3) If a tool call fails, repair schema/args and retry; if still failing, use ToolSearch once and continue with corrected call.",
+          "4) If a command fails, capture exact error evidence, run one focused diagnostic, then retry with a targeted fix.",
+          "5) Do not repeat the exact same failing call/command without changing parameters, scope, or evidence path.",
+          "6) Only declare blocked after exhausting safe options; include concrete blocker evidence and the minimum user input needed.",
+          "</system-reminder>",
+        ].join("\n")
+
+      const stuck = (msg: MessageV2.WithParts | undefined) => {
+        const text = body(msg)
+        if (!text) return false
+        return /\b(still|again|same issue|not fixed|didn[’']?t work|failed again|retry|re-try|tried \d+|third time|3rd time|fourth time|4th time)\b/i.test(
+          text,
+        )
+      }
+
+      const retry = (msg: MessageV2.WithParts | undefined) => {
+        if (!stuck(msg)) return
+        return [
+          "<system-reminder>",
+          "Repeated-attempt stability protocol:",
+          "1) Keep the current user-requested method; do not pivot approaches unless evidence proves this method cannot succeed.",
+          "2) After each failed attempt, state one concrete delta before retrying (what changed and why).",
+          "3) Re-run the same failing flow after each fix so progress is measured against identical evidence.",
+          "4) If still failing, narrow scope and isolate one boundary instead of broad rewrites.",
+          "5) Only request a method change when you have blocker evidence from at least one focused diagnostic.",
+          "</system-reminder>",
+        ].join("\n")
+      }
+
+      const tight = (msg: MessageV2.WithParts | undefined) => {
+        const text = body(msg)
+        if (!text) return false
+        return /\b(only|just|specific|scope|scoped|this area|that area|target area|targeted|within|here only|only here|this file|this function|this module|do not change|don't change|dont change|avoid touching|only in)\b/i.test(
+          text,
+        )
+      }
+
+      const focus = (msg: MessageV2.WithParts | undefined) => {
+        if (!tight(msg)) return
+        return [
+          "<system-reminder>",
+          "Scoped-update protocol for this turn:",
+          "1) When a symbol/pattern appears in multiple places, map usages first (glob/grep) before editing.",
+          "2) Partition findings into in-scope vs out-of-scope based on the user-requested area.",
+          "3) Edit only in-scope boundaries (file/function/block); avoid repo-wide replace for scoped requests.",
+          "4) After edits, verify no unintended files changed (check diff path set + targeted grep).",
+          "5) If requested area is ambiguous, do all safe discovery first, then ask one focused clarification.",
+          "</system-reminder>",
+        ].join("\n")
+      }
+
+      const crawl = (msgs: MessageV2.WithParts[], userID: MessageID | undefined) => {
+        if (!userID) return false
+        let reads = 0
+        let many = 0
+        let finds = 0
+        for (const msg of msgs) {
+          if (msg.info.id <= userID) continue
+          for (const part of msg.parts) {
+            if (part.type !== "tool") continue
+            const id = part.tool.toLowerCase()
+            if (id === "read" || id === "read_file" || id === "fileread") reads++
+            if (id === "read_many_files" || id === "multi_read" || id === "readmanyfiles") many++
+            if (id === "grep" || id === "glob" || id === "codesearch" || id === "repo_scan" || id === "list_project_files")
+              finds++
+          }
+        }
+        return (reads + finds >= 2 && many === 0) || (reads >= 2 && many === 0)
+      }
+
+      const batch = (msg: MessageV2.WithParts | undefined, msgs: MessageV2.WithParts[]) => {
+        if (!msg) return
+        const text = body(msg)
+        const scan = /\b(analy[sz]e|scan|explore|review|audit|search|find|locate|trace|codebase|multiple files|many files|across files)\b/i.test(
+          text,
+        )
+        const slow = crawl(msgs, msg.info.id)
+        if (!scan && !slow) return
+        return [
+          "<system-reminder>",
+          "Discovery-throughput protocol for this turn:",
+          "1) Do one mapping wave (repo_scan/list_project_files + 2-4 parallel glob/grep).",
+          "2) Batch-read clustered candidates with read_many_files or multi_read (target 5-20 files per batch).",
+          "3) Use read only for decisive deep dives after batch filtering.",
+          "4) Avoid one-by-one read loops when files can be grouped.",
+          "5) Do not run more than two sequential single-file discovery calls before one batch read call.",
+          "</system-reminder>",
+        ].join("\n")
+      }
+
+      const visual = (msg: MessageV2.WithParts | undefined) => {
+        const text = body(msg)
+        if (!text) return false
+        return /\b(ui|ux|visual|layout|alignment|spacing|css|style|theme|color|render|frontend|component|pixel|screenshot|screen shot|before\/after|look wrong|looks wrong)\b/i.test(
+          text,
+        )
+      }
+
+      const snap = (msg: MessageV2.WithParts | undefined) => {
+        if (!visual(msg)) return
+        return [
+          "<system-reminder>",
+          "Visual-validation protocol for this turn:",
+          "1) Capture a baseline screenshot first using screenshot.",
+          "2) For UI/layout edits, capture another screenshot after edits and compare before/after.",
+          "3) Use view_image for deeper visual inspection when the screenshot contains critical details.",
+          "4) Include before/after screenshot paths in the final summary for traceability.",
+          "</system-reminder>",
+        ].join("\n")
+      }
+
+      const look = (msg: MessageV2.WithParts | undefined) => {
+        const text = body(msg)
+        if (!text) return false
+        const ask = /\b(open|view|show|see|inspect|check)\b/i.test(text)
+        const image = /\b(image|screenshot|screen shot|photo|png|jpg|jpeg|webp|gif|bmp|tiff?)\b/i.test(text)
+        const file = /(?:\/|[A-Za-z]:\\)[^\s'"]+\.(?:png|jpe?g|webp|gif|bmp|tiff?)/i.test(text)
+        return ask && (image || file)
+      }
+
+      const image = (msg: MessageV2.WithParts | undefined) => {
+        if (!look(msg)) return
+        return [
+          "<system-reminder>",
+          "Image-open protocol for this turn:",
+          "1) If the user asks to open/view/show an image or screenshot, call view_image before describing contents.",
+          "2) When an absolute image path is provided, pass that exact path to view_image.",
+          "3) If no exact path is provided, locate candidate image files first, then call view_image.",
+          "4) Do not claim visual details unless view_image/read returned image attachment evidence in this turn.",
+          "</system-reminder>",
+        ].join("\n")
+      }
+
+      const bug = (msg: MessageV2.WithParts | undefined) => {
+        const text = body(msg)
+        if (!text) return false
+        return /\b(bug|root cause|regression|crash|panic|exception|stack trace|failing|fails|error|issue|defect|broken|not working|investigat)\b/i.test(
+          text,
+        )
+      }
+
+      const regress = (msg: MessageV2.WithParts | undefined) => {
+        const text = body(msg)
+        if (!text) return false
+        return /\b(regression|used to work|used-to-work|stopped working|after update|after upgrading|after changing|since|before)\b/i.test(
+          text,
+        )
+      }
+
+      const failed = (msgs: MessageV2.WithParts[], userID: MessageID | undefined) => {
+        if (!userID) return false
+        return msgs.some((msg) => {
+          if (msg.info.id <= userID) return false
+          return msg.parts.some((part) => {
+            if (part.type === "retry") return true
+            if (part.type !== "tool") return false
+            return part.state.status === "error"
+          })
+        })
+      }
+
+      const relay = (msgs: MessageV2.WithParts[], userID: MessageID | undefined) => {
+        if (!userID) return false
+        const ids = new Set([
+          "task",
+          "Task",
+          "TaskOutput",
+          "task_output",
+          "SendMessage",
+          "send_message",
+          "assign_task",
+        ])
+        return msgs.some((msg) => {
+          if (msg.info.id <= userID) return false
+          return msg.parts.some((part) => {
+            if (part.type === "subtask") return true
+            if (part.type !== "tool") return false
+            return ids.has(part.tool)
+          })
+        })
+      }
+
+      const cause = (msg: MessageV2.WithParts | undefined, msgs: MessageV2.WithParts[]) => {
+        if (!msg) return
+        const fire = bug(msg) || failed(msgs, msg.info.id)
+        if (!fire) return
+        const hist = regress(msg)
+        return [
+          "<system-reminder>",
+          "Root-cause mode for this request:",
+          "1) Reproduce and capture the exact failure evidence first.",
+          "2) Isolate the failing boundary with grep/read/log evidence and record one concrete boundary (file + symbol + trace/error line).",
+          "3) Form one concrete hypothesis tied to that boundary.",
+          "4) Falsify or confirm that hypothesis with one focused diagnostic before changing strategy.",
+          "5) Apply the smallest targeted fix after cause validation.",
+          "6) Re-run the failing flow, then relevant broader checks.",
+          ...(hist
+            ? [
+                "7) Regression signal detected: inspect git history on touched files (git log/blame) to identify likely causal changes.",
+              ]
+            : []),
+          "Avoid speculative broad patches before reproduction/isolation.",
+          "</system-reminder>",
+        ].join("\n")
+      }
+
+      const sync = (msg: MessageV2.WithParts | undefined, msgs: MessageV2.WithParts[]) => {
+        if (!msg) return
+        if (!relay(msgs, msg.info.id)) return
+        return [
+          "<system-reminder>",
+          "Delegation sync protocol for this turn:",
+          "1) Convert delegated findings into explicit next actions in the parent thread (no vague handoff).",
+          "2) If delegated output implies a fix/recheck, run the target verification command before marking tasks complete.",
+          "3) Keep task/todo states aligned with evidence; do not close open work without proof or blocker evidence.",
+          "</system-reminder>",
+        ].join("\n")
+      }
+
+      const agenda = (msg: MessageV2.WithParts | undefined, plan: boolean) => {
+        if (!msg || msg.info.role !== "user") return
+        const text = body(msg)
+        if (!text) return
+        if (!plan && !heavy(msg)) return
+        if (plan) {
+          return [
+            { content: "Explore codebase and constraints", status: "in_progress", priority: "high" },
+            { content: "Draft implementation approach and tradeoffs", status: "pending", priority: "high" },
+            { content: "Write final plan file with validation steps", status: "pending", priority: "medium" },
+            { content: "Call plan_exit for approval", status: "pending", priority: "medium" },
+          ] satisfies Todo.Info[]
+        }
+        if (bug(msg)) {
+          return [
+            { content: "Reproduce failure with exact evidence", status: "in_progress", priority: "high" },
+            { content: "Isolate failing boundary in code and logs", status: "pending", priority: "high" },
+            { content: "Implement smallest targeted root-cause fix", status: "pending", priority: "high" },
+            { content: "Run failing flow and regression checks", status: "pending", priority: "medium" },
+            { content: "Summarize outcomes and residual risks", status: "pending", priority: "low" },
+          ] satisfies Todo.Info[]
+        }
+        const scan = /\b(review|audit|analy[sz]e|scan|explore|map|understand)\b/i.test(text)
+        const build = /\b(fix|implement|edit|patch|write|build|run|ship|create)\b/i.test(text)
+        if (scan && !build) {
+          return [
+            { content: "Map relevant files and architecture", status: "in_progress", priority: "high" },
+            { content: "Inspect critical paths and constraints", status: "pending", priority: "high" },
+            { content: "Synthesize findings into an execution plan", status: "pending", priority: "medium" },
+            { content: "Validate assumptions with targeted checks", status: "pending", priority: "medium" },
+          ] satisfies Todo.Info[]
+        }
+        return [
+          { content: "Analyze scope and impacted files", status: "in_progress", priority: "high" },
+          { content: "Implement requested code updates", status: "pending", priority: "high" },
+          { content: "Run targeted verification commands", status: "pending", priority: "medium" },
+          { content: "Summarize changes and remaining risks", status: "pending", priority: "low" },
+        ] satisfies Todo.Info[]
+      }
+
       const resolveTools = Effect.fn("SessionPrompt.resolveTools")(function* (input: {
         agent: Agent.Info
         model: Provider.Model
@@ -441,6 +1039,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             execute(args, options) {
               return Effect.runPromise(
                 Effect.gen(function* () {
+                  const blocked = guard(item.id, args, input)
+                  if (blocked) throw new Error(blocked)
                   const ctx = context(args, options)
                   yield* plugin.trigger(
                     "tool.execute.before",
@@ -448,7 +1048,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     { args },
                   )
                   const result = yield* Effect.promise(() => item.execute(args, ctx))
-                  const output = {
+                  let output = {
                     ...result,
                     attachments: result.attachments?.map((attachment) => ({
                       ...attachment,
@@ -457,6 +1057,49 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                       messageID: input.processor.message.id,
                     })),
                   }
+
+                  if (item.id === "bash" && fail(cmd(args), code(output.metadata))) {
+                    const diag = yield* scan(dir(args) ?? Instance.directory, ctx).pipe(Effect.exit)
+                    if (Exit.isSuccess(diag)) {
+                      const note = [
+                        "<auto_log_scan>",
+                        "Automatic diagnostics: ran log_scan after non-zero bash exit.",
+                        diag.value.output,
+                        "</auto_log_scan>",
+                      ].join("\n")
+                      output = {
+                        ...output,
+                        output: output.output ? `${output.output}\n\n${note}` : note,
+                        metadata: {
+                          ...output.metadata,
+                          log_scan: {
+                            triggered: true,
+                            path: diag.value.metadata?.path,
+                            matched: diag.value.metadata?.matched,
+                            errors: diag.value.metadata?.errors,
+                            warnings: diag.value.metadata?.warnings,
+                          },
+                        },
+                      }
+                    }
+                    if (Exit.isFailure(diag)) {
+                      const err = Cause.squash(diag.cause)
+                      const msg = err instanceof Error ? err.message : String(err)
+                      log.info("auto log scan failed", { callID: ctx.callID, sessionID: ctx.sessionID, error: msg })
+                      output = {
+                        ...output,
+                        metadata: {
+                          ...output.metadata,
+                          log_scan: {
+                            triggered: true,
+                            failed: true,
+                            error: msg,
+                          },
+                        },
+                      }
+                    }
+                  }
+
                   yield* plugin.trigger(
                     "tool.execute.after",
                     { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
@@ -479,6 +1122,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           item.execute = (args, opts) =>
             Effect.runPromise(
               Effect.gen(function* () {
+                const blocked = guard(key, args, input)
+                if (blocked) throw new Error(blocked)
                 const ctx = context(args, opts)
                 yield* plugin.trigger(
                   "tool.execute.before",
@@ -875,6 +1520,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         let aborted = false
         let exited = false
         let finished = false
+        let code: number | null = null
         const kill = Effect.promise(() => Shell.killTree(proc, { exited: () => exited }))
 
         const abortHandler = () => {
@@ -890,6 +1536,65 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             if (aborted) {
               output += "\n\n" + ["<metadata>", "User aborted the command", "</metadata>"].join("\n")
             }
+            let diag:
+              | {
+                  triggered: true
+                  path?: unknown
+                  matched?: unknown
+                  errors?: unknown
+                  warnings?: unknown
+                }
+              | {
+                  triggered: true
+                  failed: true
+                  error: string
+                }
+              | undefined
+            if (fail(input.command, code, aborted)) {
+              const scanctx: Tool.Context = {
+                sessionID: input.sessionID,
+                messageID: msg.id,
+                agent: input.agent,
+                abort: signal,
+                callID: part.callID,
+                extra: { model },
+                messages: [],
+                metadata: async () => {},
+                ask: (req) =>
+                  Effect.runPromise(
+                    permission.ask({
+                      ...req,
+                      sessionID: input.sessionID,
+                      tool: { messageID: msg.id, callID: part.callID },
+                      ruleset: Permission.merge(agent.permission, session.permission ?? []),
+                    }),
+                  ),
+              }
+              const result = yield* scan(cwd, scanctx).pipe(Effect.exit)
+              if (Exit.isSuccess(result)) {
+                output +=
+                  "\n\n" +
+                  [
+                    "<auto_log_scan>",
+                    "Automatic diagnostics: ran log_scan after non-zero shell exit.",
+                    result.value.output,
+                    "</auto_log_scan>",
+                  ].join("\n")
+                diag = {
+                  triggered: true,
+                  path: result.value.metadata?.path,
+                  matched: result.value.metadata?.matched,
+                  errors: result.value.metadata?.errors,
+                  warnings: result.value.metadata?.warnings,
+                }
+              }
+              if (Exit.isFailure(result)) {
+                const err = Cause.squash(result.cause)
+                const text = err instanceof Error ? err.message : String(err)
+                log.info("auto log scan failed", { callID: part.callID, sessionID: input.sessionID, error: text })
+                diag = { triggered: true, failed: true, error: text }
+              }
+            }
             if (!msg.time.completed) {
               msg.time.completed = Date.now()
               yield* sessions.updateMessage(msg)
@@ -900,7 +1605,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 time: { ...part.state.time, end: Date.now() },
                 input: part.state.input,
                 title: "",
-                metadata: { output, description: "" },
+                metadata: {
+                  output,
+                  description: "",
+                  exit: code,
+                  ...(diag ? { log_scan: diag } : {}),
+                },
                 output,
               }
               yield* sessions.updatePart(part)
@@ -912,8 +1622,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           signal.addEventListener("abort", abortHandler, { once: true })
           if (signal.aborted) abortHandler()
           return new Promise<void>((resolve) => {
-            const close = () => {
+            const close = (next: number | null) => {
               exited = true
+              code = next ?? proc.exitCode
               proc.off("close", close)
               resolve()
             }
@@ -1354,6 +2065,20 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           const ctx = yield* InstanceState.context
           let structured: unknown | undefined
           let step = 0
+          let gate = 0
+          const tries = 6
+          let rooted = 0
+          let swept = 0
+          let focused = 0
+          let snapped = 0
+          let imaged = 0
+          let batched = 0
+          let synced = 0
+          let rallied = 0
+          let primed = 0
+          let planned = 0
+          let schema = 0
+          const schemaLimit = 1
           const session = yield* sessions.get(sessionID)
 
           while (true) {
@@ -1397,6 +2122,35 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
             const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
             const task = tasks.pop()
+            const active = yield* agents.get(lastUser.agent)
+            if (!active) {
+              const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
+              const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
+              const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
+              yield* bus.publish(Session.Event.Error, { sessionID, error: error.toObject() })
+              throw error
+            }
+
+            if (
+              planned === 0 &&
+              active.mode !== "subagent" &&
+              active.name !== "compaction" &&
+              active.name !== "title" &&
+              active.name !== "summary"
+            ) {
+              const latest = msgs.findLast((item) => item.info.role === "user")
+              const open = yield* pending(sessionID)
+              if (open.todos.length === 0 && open.tasks.length === 0) {
+                const rows = agenda(latest, active.name === "plan")
+                if (rows && rows.length > 0) {
+                  planned = 1
+                  Todo.update({
+                    sessionID,
+                    todos: rows,
+                  })
+                }
+              }
+            }
 
             if (task?.type === "subtask") {
               yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
@@ -1423,15 +2177,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
               continue
             }
-
-            const agent = yield* agents.get(lastUser.agent)
-            if (!agent) {
-              const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
-              const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-              const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
-              yield* bus.publish(Session.Event.Error, { sessionID, error: error.toObject() })
-              throw error
-            }
+            const agent = active
             const maxSteps = agent.steps ?? Infinity
             const isLastStep = step >= maxSteps
             msgs = yield* insertReminders({ messages: msgs, agent, session })
@@ -1515,6 +2261,86 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 const system = [...env, ...(skills ? [skills] : []), ...instructions]
                 const format = lastUser.format ?? { type: "text" as const }
                 if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+                const open = yield* pending(sessionID)
+                const nudge = hint(open)
+                if (nudge) system.push(nudge)
+                if (rooted === 0) {
+                  const latest = msgs.findLast((item) => item.info.role === "user")
+                  const forced = cause(latest, msgs)
+                  if (forced) {
+                    system.push(forced)
+                    rooted = 1
+                  }
+                }
+                if (swept === 0) {
+                  const latest = msgs.findLast((item) => item.info.role === "user")
+                  const forced = sweep(latest)
+                  if (forced) {
+                    system.push(forced)
+                    swept = 1
+                  }
+                }
+                if (primed === 0) {
+                  const latest = msgs.findLast((item) => item.info.role === "user")
+                  const forced = preflight(latest)
+                  if (forced) {
+                    system.push(forced)
+                    primed = 1
+                  }
+                }
+                if (focused === 0) {
+                  const latest = msgs.findLast((item) => item.info.role === "user")
+                  const forced = focus(latest)
+                  if (forced) {
+                    system.push(forced)
+                    focused = 1
+                  }
+                }
+                if (snapped === 0) {
+                  const latest = msgs.findLast((item) => item.info.role === "user")
+                  const forced = snap(latest)
+                  if (forced) {
+                    system.push(forced)
+                    snapped = 1
+                  }
+                }
+                if (imaged === 0) {
+                  const latest = msgs.findLast((item) => item.info.role === "user")
+                  const forced = image(latest)
+                  if (forced) {
+                    system.push(forced)
+                    imaged = 1
+                  }
+                }
+                if (batched === 0) {
+                  const latest = msgs.findLast((item) => item.info.role === "user")
+                  const forced = batch(latest, msgs)
+                  if (forced) {
+                    system.push(forced)
+                    batched = 1
+                  }
+                }
+                if (synced === 0) {
+                  const latest = msgs.findLast((item) => item.info.role === "user")
+                  const forced = sync(latest, msgs)
+                  if (forced) {
+                    system.push(forced)
+                    synced = 1
+                  }
+                }
+                if (rallied === 0) {
+                  const latest = msgs.findLast((item) => item.info.role === "user")
+                  const forced = retry(latest)
+                  if (forced) {
+                    system.push(forced)
+                    rallied = 1
+                  }
+                }
+                system.push(refine())
+                system.push(voice())
+                system.push(rail())
+                system.push(grit())
+                system.push(finale())
                 const result = yield* handle.process({
                   user: lastUser,
                   agent,
@@ -1543,6 +2369,73 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     }).toObject()
                     yield* sessions.updateMessage(handle.message)
                     return "break" as const
+                  }
+                  if (schema < schemaLimit) {
+                    const all = yield* Effect.promise(() => MessageV2.filterCompacted(MessageV2.stream(sessionID)))
+                    const mismatch = unresolvedSchema(all, lastUser.id)
+                    if (mismatch) {
+                      schema++
+                      const msg: MessageV2.User = {
+                        id: MessageID.ascending(),
+                        sessionID,
+                        role: "user",
+                        time: { created: Date.now() },
+                        agent: lastUser.agent,
+                        model: lastUser.model,
+                      }
+                      yield* sessions.updateMessage(msg)
+                      const note = [
+                        "<system-reminder>",
+                        `Tool schema failure remains unresolved for ${mismatch.tool}.`,
+                        "Before stopping, retry exactly once now with corrected arguments for the same tool intent.",
+                        "If argument shape is uncertain, call tool_search once, then retry with corrected input.",
+                        `Last error: ${clip(mismatch.error)}`,
+                        "</system-reminder>",
+                      ].join("\n")
+                      yield* sessions.updatePart({
+                        id: PartID.ascending(),
+                        messageID: msg.id,
+                        sessionID,
+                        type: "text",
+                        text: note,
+                        synthetic: true,
+                      } satisfies MessageV2.TextPart)
+                      handle.message.finish = "tool-calls"
+                      yield* sessions.updateMessage(handle.message)
+                      return "continue" as const
+                    }
+                  }
+                  const open = yield* pending(sessionID)
+                  if ((open.todos.length > 0 || open.tasks.length > 0) && gate < tries) {
+                    gate++
+                    const msg: MessageV2.User = {
+                      id: MessageID.ascending(),
+                      sessionID,
+                      role: "user",
+                      time: { created: Date.now() },
+                      agent: lastUser.agent,
+                      model: lastUser.model,
+                    }
+                    yield* sessions.updateMessage(msg)
+                    const note = [
+                      "<system-reminder>",
+                      `You still have open tasks/todos (persistence pass ${gate}/${tries}). Continue execution now instead of stopping.`,
+                      "Keep the current method unless evidence proves it cannot work.",
+                      "Do not switch to an alternate method unless blocked.",
+                      "Update Task/Todo states as you progress; only stop when done or blocked.",
+                      "</system-reminder>",
+                    ].join("\n")
+                    yield* sessions.updatePart({
+                      id: PartID.ascending(),
+                      messageID: msg.id,
+                      sessionID,
+                      type: "text",
+                      text: note,
+                      synthetic: true,
+                    } satisfies MessageV2.TextPart)
+                    handle.message.finish = "tool-calls"
+                    yield* sessions.updateMessage(handle.message)
+                    return "continue" as const
                   }
                 }
 

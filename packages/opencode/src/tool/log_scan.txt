@@ -1,0 +1,12 @@
+Scans log files deeply and returns prioritized diagnostics with likely root-cause signals.
+
+Use this when:
+- A dev server, build, test, or runtime command fails and you need fast error triage.
+- You want on-disk log analysis beyond live terminal output.
+- You need a condensed list of high-signal failures across many log files.
+
+Behavior:
+- Searches for log-like files under a directory (default: working directory).
+- Reads tail sections for each file, then extracts and ranks error/warning lines.
+- Supports regex filtering and severity filtering.
+- Returns structured JSON with summary totals, key findings, and per-file evidence.

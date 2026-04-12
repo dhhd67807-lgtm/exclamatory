@@ -558,6 +558,30 @@ jobs:
           name: latest-yml-${{ matrix.settings.target }}
           path: packages/desktop-electron/dist/latest*.yml
 
+  finalize-electron-latest-yml:
+    if: github.repository == 'dhhd67807-lgtm/exclamatory' && needs.version.outputs.release != ''
+    needs:
+      - version
+      - build-electron
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-bun
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: latest-yml-*
+          path: /tmp/latest-yml
+
+      - name: Finalize Electron update metadata
+        run: bun ./packages/desktop-electron/scripts/finalize-latest-yml.ts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ needs.version.outputs.repo }}
+          OPENCODE_VERSION: ${{ needs.version.outputs.version }}
+          LATEST_YML_DIR: /tmp/latest-yml
+
   publish:
     if: github.repository == 'anomalyco/opencode'
     needs:

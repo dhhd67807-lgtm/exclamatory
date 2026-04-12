@@ -6,11 +6,12 @@ import path from "path"
 const dir = process.env.LATEST_YML_DIR!
 if (!dir) throw new Error("LATEST_YML_DIR is required")
 
+const dry = process.env.LATEST_YML_DRY_RUN === "1"
 const repo = process.env.GH_REPO
-if (!repo) throw new Error("GH_REPO is required")
+if (!dry && !repo) throw new Error("GH_REPO is required")
 
 const version = process.env.OPENCODE_VERSION
-if (!version) throw new Error("OPENCODE_VERSION is required")
+if (!dry && !version) throw new Error("OPENCODE_VERSION is required")
 
 type FileEntry = {
   url: string
@@ -66,6 +67,11 @@ function serialize(data: LatestYml) {
     lines.push(`    size: ${file.size}`)
     if (file.blockMapSize) lines.push(`    blockMapSize: ${file.blockMapSize}`)
   }
+  const head = data.files[0]
+  if (head) {
+    lines.push(`path: ${head.url}`)
+    lines.push(`sha512: ${head.sha512}`)
+  }
   lines.push(`releaseDate: '${data.releaseDate}'`)
   return lines.join("\n") + "\n"
 }
@@ -74,6 +80,15 @@ async function read(subdir: string, filename: string): Promise<LatestYml | undef
   const file = Bun.file(path.join(dir, subdir, filename))
   if (!(await file.exists())) return undefined
   return parse(await file.text())
+}
+
+function uniq(files: FileEntry[]) {
+  const seen = new Set<string>()
+  return files.filter((file) => {
+    if (seen.has(file.url)) return false
+    seen.add(file.url)
+    return true
+  })
 }
 
 const output: Record<string, string> = {}
@@ -85,7 +100,7 @@ if (winX64 || winArm64) {
   const base = winArm64 ?? winX64!
   output["latest.yml"] = serialize({
     version: base.version,
-    files: [...(winArm64?.files ?? []), ...(winX64?.files ?? [])],
+    files: uniq([...(winArm64?.files ?? []), ...(winX64?.files ?? [])]),
     releaseDate: base.releaseDate,
   })
 }
@@ -105,18 +120,23 @@ if (macX64 || macArm64) {
   const base = macArm64 ?? macX64!
   output["latest-mac.yml"] = serialize({
     version: base.version,
-    files: [...(macArm64?.files ?? []), ...(macX64?.files ?? [])],
+    files: uniq([...(macArm64?.files ?? []), ...(macX64?.files ?? [])]),
     releaseDate: base.releaseDate,
   })
 }
 
 // Upload to release
-const tag = `v${version}`
+const tag = `v${version ?? "0.0.0"}`
 const tmp = process.env.RUNNER_TEMP ?? "/tmp"
+const out = process.env.LATEST_YML_OUTPUT_DIR ?? tmp
 
 for (const [filename, content] of Object.entries(output)) {
-  const filepath = path.join(tmp, filename)
+  const filepath = path.join(out, filename)
   await Bun.write(filepath, content)
+  if (dry) {
+    console.log(`wrote ${filepath}`)
+    continue
+  }
   await $`gh release upload ${tag} ${filepath} --clobber --repo ${repo}`
   console.log(`uploaded ${filename}`)
 }

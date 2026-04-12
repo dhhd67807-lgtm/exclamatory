@@ -58,20 +58,26 @@ export function getCurrentSidecar(target = RUST_TARGET ?? nativeTarget()) {
   return binaryConfig
 }
 
-export async function copyBinaryToSidecarFolder(source: string) {
+function iswin(target?: string) {
+  if (target) return target.includes("windows")
+  return process.platform === "win32"
+}
+
+export async function copyBinaryToSidecarFolder(source: string, target?: string) {
   const dir = `resources`
+  const win = iswin(target)
   await $`mkdir -p ${dir}`
-  const dest = windowsify(`${dir}/opencode-cli`)
+  const dest = windowsify(`${dir}/opencode-cli`, target)
   await $`cp ${source} ${dest}`
-  if (process.platform === "win32" && process.env.GITHUB_ACTIONS === "true") {
+  if (process.platform === "win32" && win && process.env.GITHUB_ACTIONS === "true") {
     await $`pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File ../../script/sign-windows.ps1 ${dest}`
   }
-  if (process.platform === "darwin") await $`codesign --force --sign - ${dest}`
+  if (process.platform === "darwin" && !win) await $`codesign --force --sign - ${dest}`
 
   console.log(`Copied ${source} to ${dest}`)
 }
 
-export function windowsify(path: string) {
+export function windowsify(path: string, target?: string) {
   if (path.endsWith(".exe")) return path
-  return `${path}${process.platform === "win32" ? ".exe" : ""}`
+  return `${path}${iswin(target) ? ".exe" : ""}`
 }

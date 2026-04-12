@@ -1,14 +1,14 @@
 {
   "name": "@opencode-ai/desktop-electron",
   "private": true,
-  "version": "1.0.2",
-  "description": "Exclamatory desktop app",
+  "version": "1.0.3",
+  "description": "Exclamtoy desktop app",
   "type": "module",
   "license": "MIT",
   "homepage": "https://github.com/dhhd67807-lgtm/exclamatory",
   "author": {
-    "name": "Exclamatory",
-    "email": "support@exclamatory.app"
+    "name": "Exclamtoy",
+    "email": "support@exclamtoy.app"
   },
   "scripts": {
     "typecheck": "tsgo -b",
@@ -21,8 +21,8 @@
     "package": "electron-builder --config electron-builder.config.ts",
     "prepackage:mac": "bun run prepackage",
     "package:mac": "electron-builder --mac --config electron-builder.config.ts",
-    "prepackage:win": "bun run prepackage",
-    "package:win": "electron-builder --win --config electron-builder.config.ts",
+    "prepackage:win": "bun ./scripts/predev.ts --target x86_64-pc-windows-msvc && bun run build",
+    "package:win": "electron-builder --win --x64 --config electron-builder.config.ts",
     "prepackage:linux": "bun run prepackage",
     "package:linux": "electron-builder --linux --config electron-builder.config.ts",
     "native:build": "bun install --cwd native"

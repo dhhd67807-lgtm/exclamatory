@@ -154,25 +154,45 @@ const allTargets: {
   },
 ]
 
+const forced: { os: string; arch: "arm64" | "x64"; abi?: "musl"; avx2?: false } | undefined = (() => {
+  const raw = process.env.RUST_TARGET
+  if (!raw) return
+  if (raw === "aarch64-apple-darwin") return { os: "darwin", arch: "arm64" } as const
+  if (raw === "x86_64-apple-darwin") return { os: "darwin", arch: "x64", avx2: false } as const
+  if (raw === "aarch64-pc-windows-msvc") return { os: "win32", arch: "arm64" } as const
+  if (raw === "x86_64-pc-windows-msvc") return { os: "win32", arch: "x64", avx2: false } as const
+  if (raw === "aarch64-unknown-linux-gnu") return { os: "linux", arch: "arm64" } as const
+  if (raw === "x86_64-unknown-linux-gnu") return { os: "linux", arch: "x64", avx2: false } as const
+  throw new Error(`Unsupported RUST_TARGET: ${raw}`)
+})()
+
 const targets = singleFlag
-  ? allTargets.filter((item) => {
-      if (item.os !== process.platform || item.arch !== process.arch) {
-        return false
-      }
+  ? forced
+    ? allTargets.filter((item) => {
+        if (item.os !== forced.os || item.arch !== forced.arch) return false
+        if (forced.avx2 === false) return item.avx2 === false
+        if (item.avx2 === false) return false
+        if (forced.abi) return item.abi === forced.abi
+        return item.abi === undefined
+      })
+    : allTargets.filter((item) => {
+        if (item.os !== process.platform || item.arch !== process.arch) {
+          return false
+        }
 
-      // When building for the current platform, prefer a single native binary by default.
-      // Baseline binaries require additional Bun artifacts and can be flaky to download.
-      if (item.avx2 === false) {
-        return baselineFlag
-      }
+        // When building for the current platform, prefer a single native binary by default.
+        // Baseline binaries require additional Bun artifacts and can be flaky to download.
+        if (item.avx2 === false) {
+          return baselineFlag
+        }
 
-      // also skip abi-specific builds for the same reason
-      if (item.abi !== undefined) {
-        return false
-      }
+        // also skip abi-specific builds for the same reason
+        if (item.abi !== undefined) {
+          return false
+        }
 
-      return true
-    })
+        return true
+      })
   : allTargets
 
 await $`rm -rf dist`

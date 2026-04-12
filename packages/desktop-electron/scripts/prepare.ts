@@ -20,6 +20,9 @@ const dir = "resources/opencode-binaries"
 await $`mkdir -p ${dir}`
 await $`gh run download ${process.env.GITHUB_RUN_ID} -n ${artifact}`.cwd(dir)
 
-await copyBinaryToSidecarFolder(windowsify(`${dir}/${sidecarConfig.ocBinary}/bin/opencode`))
+await copyBinaryToSidecarFolder(
+  windowsify(`${dir}/${sidecarConfig.ocBinary}/bin/opencode`, sidecarConfig.rustTarget),
+  sidecarConfig.rustTarget,
+)
 
 await $`rm -rf ${dir}`
